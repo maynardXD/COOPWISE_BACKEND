@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: coopwise-backend
+    runtime: docker
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DB_DRIVER
+        value: mysql
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: COOPWISE_JWT_SECRET
+        sync: false
+      - key: COOPWISE_REFRESH_TOKEN_KEY
+        sync: false
+      - key: COOPWISE_SESSION_HMAC_SECRET
+        sync: false
+      - key: COOPWISE_ALLOWED_ORIGINS
+        sync: false

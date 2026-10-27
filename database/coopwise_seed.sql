@@ -1,0 +1,4 @@
+-- No default administrator credentials are seeded.
+-- Register an account, then assign the first cooperative administrator
+-- directly in your trusted database console after verifying its email:
+-- UPDATE users SET role = 'admin' WHERE email = 'your-admin@example.com';

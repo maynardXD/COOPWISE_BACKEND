@@ -1,0 +1,35 @@
+.DS_Store
+
+app/vendor/*
+vendor/
+.env
+.env.*
+!.env.example
+!.env.render.example
+!.env.vercel.example
+runtime/cache/*
+runtime/logs/*
+runtime/session/*
+runtime/uploads/*
+!runtime/.htaccess
+!runtime/index.html
+!.github/
+*.log
+*.sqlite
+*.sqlite3
+
+runtime/*
+!runtime/.htaccess
+!runtime/index.html
+
+# IDE Files
+#-------------------------
+/nbproject/
+.idea/*
+
+## Sublime Text cache files
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project

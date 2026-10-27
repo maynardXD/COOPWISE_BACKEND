@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.example
+!.env.render.example
+runtime/cache
+runtime/logs
+runtime/session
+runtime/uploads
+app/vendor
+vendor
+node_modules
+frontend
+database/*.sql
