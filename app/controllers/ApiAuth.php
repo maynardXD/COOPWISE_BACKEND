@@ -8,8 +8,8 @@ class ApiAuth extends Controller
     public function __construct()
     {
         parent::__construct();
-        $this->call->model('User_model');
         $this->api = $this->call->library('api');
+        $this->call->model('User_model');
     }
 
     public function login()
