@@ -11,6 +11,7 @@ runtime/cache/*
 runtime/logs/*
 runtime/session/*
 runtime/uploads/*
+public/runtime/cache/*
 !runtime/.htaccess
 !runtime/index.html
 !.github/
