@@ -100,7 +100,9 @@ have not yet been migrated to the separate frontend.
 ### Backend on Render
 
 1. Connect the backend GitHub repository to a Render **Web Service** and select
-   Docker as its runtime. The `Dockerfile` listens on Render's `PORT`.
+   Docker as its runtime. The `Dockerfile` listens on Render's `PORT`. The
+   Blueprint explicitly selects Render's `free` plan so it does not default to
+   a paid web-service plan.
 2. Provide an external MySQL-compatible database (Render does not supply a
    managed MySQL database). Import `coopwise_schema.sql` and the additive
    upgrade scripts into it using a trusted database client. For Aiven MySQL,
@@ -113,6 +115,12 @@ have not yet been migrated to the separate frontend.
    of at least 32 characters. Set `COOPWISE_ALLOWED_ORIGINS` to the exact
    deployed Vercel origin; do not use `*`.
 4. Configure `/api/health` as Render's health-check path.
+
+The free web service is suitable for a school demo, not a production banking
+service. Render spins it down after 15 minutes without traffic; the first
+request after that can take about a minute while it starts. Its local filesystem
+is temporary, so the app stores persistent records in Aiven MySQL rather than
+on the Render service. Monitor free usage and Aiven billing separately.
 
 ### Frontend on Vercel
 
