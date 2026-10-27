@@ -89,10 +89,13 @@ generation, settings, and expanded notification features are not implemented.
 
 The backend is still the LavaLust project. A separate React/Vite frontend lives
 in the sibling `COOPWISE_FRONTEND` repository/directory; it is not another
-LavaLust install. Its current API integration supports registration, sign-in,
-and loading the signed-in profile. The existing loan and daily-cycle workflows
-are still rendered by LavaLust; those workflows need REST endpoints and React
-screens before they can be used from the separate frontend.
+LavaLust install. The separate frontend uses LavaLust's built-in `Api` class,
+JWT authentication, explicit API routes, and the framework database query
+builder. It supports registration/sign-in, member loan applications and
+schedules, staff loan product/review/payment workflows, and daily Paluwagan
+cycle enrollment, contributions, payout readiness, and staff payout
+confirmation. Savings and other legacy pages remain in the LavaLust app and
+have not yet been migrated to the separate frontend.
 
 ### Backend on Render
 
