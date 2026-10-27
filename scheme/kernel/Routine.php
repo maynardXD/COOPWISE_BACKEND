@@ -183,12 +183,43 @@ if ( ! function_exists('_exception_handler'))
 			$logger = load_class('logger', 'kernel');
 			$logger->log('error', get_class($e), $e->getMessage(), $e->getFile(), $e->getLine());
 		}
-		if(strtolower(config_item('ENVIRONMENT') == 'development'))
+		error_log(sprintf(
+			'Unhandled %s: %s in %s:%d',
+			get_class($e),
+			$e->getMessage(),
+			$e->getFile(),
+			$e->getLine()
+		));
+
+		if (strtolower((string) config_item('ENVIRONMENT')) === 'development')
 		{
 			$exception = load_class('Errors', 'kernel');
 			$exception->show_exception($e);
 		}
-		
+
+		$request_path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+		if (is_string($request_path) && preg_match('#^/api(?:/|$)#', $request_path)) {
+			$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+			$allowed_origins = getenv('COOPWISE_ALLOWED_ORIGINS');
+			$allowed_origins = $allowed_origins === false
+				? []
+				: array_values(array_filter(array_map('trim', explode(',', $allowed_origins))));
+
+			if ($origin !== '' && in_array($origin, $allowed_origins, true)) {
+				header('Access-Control-Allow-Origin: ' . $origin);
+				header('Access-Control-Allow-Credentials: true');
+				header('Vary: Origin', false);
+			}
+
+			http_response_code(500);
+			header('Content-Type: application/json; charset=UTF-8');
+			echo json_encode([
+				'message' => 'The server could not complete the request.'
+			], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+			return;
+		}
+
+		http_response_code(500);
 	}
 }
 
