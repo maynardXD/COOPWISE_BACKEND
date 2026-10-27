@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.render.example
+aiven-ca.pem
 runtime/cache
 runtime/logs
 runtime/session

@@ -1,7 +1,9 @@
 FROM php:8.3-apache
 
 RUN docker-php-ext-install pdo_mysql \
-    && a2enmod rewrite headers
+    && a2enmod rewrite headers \
+    && if ! getent group 1000 >/dev/null; then groupadd --gid 1000 render-secrets; fi \
+    && usermod --append --groups 1000 www-data
 
 WORKDIR /var/www/html
 COPY . /var/www/html
