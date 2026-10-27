@@ -103,7 +103,10 @@ have not yet been migrated to the separate frontend.
    Docker as its runtime. The `Dockerfile` listens on Render's `PORT`.
 2. Provide an external MySQL-compatible database (Render does not supply a
    managed MySQL database). Import `coopwise_schema.sql` and the additive
-   upgrade scripts into it using a trusted database client.
+   upgrade scripts into it using a trusted database client. For Aiven MySQL,
+   upload its CA certificate in Render's **Secret Files** as
+   `/etc/secrets/aiven-ca.pem`; set `DB_SSL_CA` to that path. The LavaLust
+   database connection uses PDO MySQL TLS and verifies the server certificate.
 3. Set the environment variables from `.env.render.example` in Render's
    dashboard. Set `APP_BASE_URL` to the Render service URL, database credentials
    to the hosted MySQL values, and all three secrets to distinct random values

@@ -70,6 +70,7 @@ $database['main'] = array(
     'password'  => $environment_value('DB_PASSWORD', ''),
     'database'  => $environment_value('DB_DATABASE', 'coopwise_db'),
     'charset'   => $environment_value('DB_CHARSET', 'utf8mb4'),
+    'ssl_ca'    => $environment_value('DB_SSL_CA', ''),
     'dbprefix'  => '',
     'path'      => ''
 );

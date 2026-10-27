@@ -18,6 +18,8 @@ services:
         sync: false
       - key: DB_PASSWORD
         sync: false
+      - key: DB_SSL_CA
+        value: /etc/secrets/aiven-ca.pem
       - key: COOPWISE_JWT_SECRET
         sync: false
       - key: COOPWISE_REFRESH_TOKEN_KEY
