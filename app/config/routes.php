@@ -71,6 +71,7 @@ $router->get('/api/payments', 'ApiLoans::payments');
 $router->post('/api/loans/{loan_id}/payments', 'ApiLoans::record_payment')->where_number('loan_id');
 $router->get('/api/payment-submissions', 'ApiPayments::submissions');
 $router->post('/api/payment-submissions', 'ApiPayments::submissions');
+$router->get('/api/members', 'ApiPayments::members');
 $router->get('/api/payment-submissions/{submission_id}/screenshot', 'ApiPayments::screenshot')->where_number('submission_id');
 $router->post('/api/payment-submissions/{submission_id}/review', 'ApiPayments::review')->where_number('submission_id');
 $router->get('/api/admin/search', 'ApiPayments::admin_search');
@@ -88,6 +89,7 @@ $router->options('/api/loans/{loan_id}/schedule', 'ApiHealth::index')->where_num
 $router->options('/api/payments', 'ApiHealth::index');
 $router->options('/api/loans/{loan_id}/payments', 'ApiHealth::index')->where_number('loan_id');
 $router->options('/api/payment-submissions', 'ApiHealth::index');
+$router->options('/api/members', 'ApiHealth::index');
 $router->options('/api/payment-submissions/{submission_id}/screenshot', 'ApiHealth::index')->where_number('submission_id');
 $router->options('/api/payment-submissions/{submission_id}/review', 'ApiHealth::index')->where_number('submission_id');
 $router->options('/api/admin/search', 'ApiHealth::index');

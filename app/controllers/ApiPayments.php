@@ -42,6 +42,36 @@ class ApiPayments extends Controller
         $this->api->respond(['submissions' => $submissions]);
     }
 
+    public function members()
+    {
+        $this->api->require_method('GET');
+        $user = $this->authenticated_user();
+        $this->require_staff($user);
+        $term = trim((string) ($_GET['q'] ?? ''));
+        if ($term !== '' && strlen($term) < 2) {
+            $this->api->respond_error('Search with at least 2 characters.', 422);
+        }
+        if (strlen($term) > 100) {
+            $this->api->respond_error('Search with no more than 100 characters.', 422);
+        }
+
+        $sql = "SELECT m.id, m.member_number, m.first_name, m.middle_name, m.last_name,
+                       m.email, m.contact_number, m.address, m.birth_date, m.status,
+                       COALESCE(u.role, 'unlinked') AS account_role
+                FROM members m
+                LEFT JOIN users u ON u.id = m.user_id";
+        $params = [];
+        if ($term !== '') {
+            $pattern = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
+            $sql .= " WHERE m.member_number LIKE ? OR CONCAT(m.first_name, ' ', m.last_name) LIKE ?
+                      OR m.email LIKE ? OR m.contact_number LIKE ?";
+            $params = [$pattern, $pattern, $pattern, $pattern];
+        }
+        $sql .= ' ORDER BY m.last_name ASC, m.first_name ASC LIMIT 100';
+        $members = $this->db->raw($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
+        $this->api->respond(['members' => $members]);
+    }
+
     public function screenshot($submission_id = null)
     {
         $this->api->require_method('GET');
