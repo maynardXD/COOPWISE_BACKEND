@@ -10,6 +10,7 @@ class ApiLoans extends Controller
     {
         parent::__construct();
         $this->api = $this->call->library('api');
+        $this->call->library('coopwise_access');
         $this->db = $this->call->database();
         $this->call->model('User_model');
         $this->call->model('Member_model');
