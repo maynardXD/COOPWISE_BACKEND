@@ -48,9 +48,6 @@ class ApiPayments extends Controller
         $user = $this->authenticated_user();
         $this->require_staff($user);
         $term = trim((string) ($_GET['q'] ?? ''));
-        if ($term !== '' && strlen($term) < 2) {
-            $this->api->respond_error('Search with at least 2 characters.', 422);
-        }
         if (strlen($term) > 100) {
             $this->api->respond_error('Search with no more than 100 characters.', 422);
         }
@@ -62,10 +59,12 @@ class ApiPayments extends Controller
                 LEFT JOIN users u ON u.id = m.user_id";
         $params = [];
         if ($term !== '') {
-            $pattern = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
-            $sql .= " WHERE m.member_number LIKE ? OR CONCAT(m.first_name, ' ', m.last_name) LIKE ?
-                      OR m.email LIKE ? OR m.contact_number LIKE ?";
-            $params = [$pattern, $pattern, $pattern, $pattern];
+            $escaped_term = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term);
+            $name_pattern = '%' . $escaped_term . '%';
+            $prefix_pattern = $escaped_term . '%';
+            $sql .= " WHERE CONCAT_WS(' ', m.first_name, m.middle_name, m.last_name) LIKE ?
+                      OR m.member_number LIKE ? OR m.email LIKE ? OR m.contact_number LIKE ?";
+            $params = [$name_pattern, $prefix_pattern, $prefix_pattern, $prefix_pattern];
         }
         $sql .= ' ORDER BY m.last_name ASC, m.first_name ASC LIMIT 100';
         $members = $this->db->raw($sql, $params)->fetchAll(PDO::FETCH_ASSOC);
