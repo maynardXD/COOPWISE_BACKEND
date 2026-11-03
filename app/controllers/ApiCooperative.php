@@ -32,10 +32,16 @@ class ApiCooperative extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
         $found_tables = array_unique(array_column($schema, 'table_name'));
         $missing_tables = array_values(array_diff($required_tables, $found_tables));
+        $active_database = $this->db->raw('SELECT DATABASE()')->fetchColumn();
         if ($missing_tables) {
-            error_log('CoopWise cooperative API schema is incomplete; missing tables: ' . implode(', ', $missing_tables));
+            error_log(
+                'CoopWise cooperative API schema is incomplete; active database: '
+                . (string) $active_database
+                . '; missing tables: '
+                . implode(', ', $missing_tables)
+            );
             $this->api->respond_error(
-                'Daily Paluwagan is not configured in the database yet. Apply database/coopwise_loans_cooperative_upgrade.sql, then retry.',
+                'The API database is missing the Daily Paluwagan tables. Check Render DB_HOST, DB_DATABASE, and DB_USERNAME against the database where the migration was applied.',
                 503
             );
         }
@@ -58,9 +64,14 @@ class ApiCooperative extends Controller
             }
         }
         if ($missing_columns) {
-            error_log('CoopWise cooperative API schema is incomplete; missing columns: ' . implode(', ', $missing_columns));
+            error_log(
+                'CoopWise cooperative API schema is incomplete; active database: '
+                . (string) $active_database
+                . '; missing columns: '
+                . implode(', ', $missing_columns)
+            );
             $this->api->respond_error(
-                'Daily Paluwagan database tables are incomplete. Reapply database/coopwise_loans_cooperative_upgrade.sql, then retry.',
+                'The API database has incomplete Daily Paluwagan tables. Check Render DB_HOST, DB_DATABASE, and DB_USERNAME against the database where the migration was applied.',
                 503
             );
         }
