@@ -83,7 +83,19 @@ constraint. Make a database backup before applying it.
   does not move real money or connect to a payment provider.
 - Savings transactions are recorded by staff, checked against the member's
   available balance, and saved through LavaLust's query builder in a database
-  transaction. Members can view only their own savings history.
+  transaction. Members can view only their own savings history. The
+  authenticated `/api/savings/ledger` endpoint returns the signed-in member's
+  selected period with opening/closing balances and transaction totals;
+  `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
+  `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
+- Members can issue their own printable ID card from `/api/member-card`, while
+  staff can issue a selected member's card through
+  `/api/members/{member_id}/card`. The QR uses a signed internal member
+  identifier; `/api/member-cards/verify?token=...` checks the signature and
+  returns only the member name, member number, and current membership status.
+  Verification is rate-limited, and changing a member's status is reflected on
+  the next scan. Keep the production `COOPWISE_JWT_SECRET` set to a strong,
+  private value because it signs both access tokens and member-card QR tokens.
 - Members can submit GCash payment evidence for review using the provided QR
   code, a screenshot, and/or a transaction reference number. Staff can mark
   evidence verified or reject it. This is a manual review workflow only: it is
@@ -112,7 +124,8 @@ in the sibling `COOPWISE_FRONTEND` repository/directory; it is not another
 LavaLust install. The separate frontend uses LavaLust's built-in `Api` class,
 JWT authentication, explicit API routes, and the framework database query
 builder. It supports registration/sign-in, a searchable staff member directory,
-the savings ledger and staff reports, member loan-document review before offer
+date-filtered printable savings ledgers and signed QR member ID cards, staff
+reports, member loan-document review before offer
 access, loan applications and schedules, payment evidence submission and review,
 staff loan product/review/payment workflows, and daily Paluwagan cycle
 enrollment, contributions, payout readiness, and staff payout confirmation.

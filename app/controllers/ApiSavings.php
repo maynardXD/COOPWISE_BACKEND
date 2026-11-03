@@ -47,6 +47,98 @@ class ApiSavings extends Controller
         $this->api->respond(['transactions' => $transactions, 'members' => $members, 'balance' => $balance]);
     }
 
+    public function ledger($member_id = null)
+    {
+        $this->api->require_method('GET');
+        $user = $this->authenticated_user();
+        if ($user['role'] === 'member') {
+            if ($member_id !== null) {
+                $this->api->respond_error('Members may only view their own savings ledger.', 403);
+            }
+            $member = $this->member_profile($user);
+        } else {
+            $this->require_staff($user);
+            $id = filter_var($member_id, FILTER_VALIDATE_INT);
+            if (!$id || $id < 1) {
+                $this->api->respond_error('Choose a valid member to view the savings ledger.', 422);
+            }
+            $member = $this->db->table('members')
+                ->where('id', (int) $id)
+                ->get();
+            if (!$member) {
+                $this->api->respond_error('Member not found.', 404);
+            }
+        }
+
+        $today = date('Y-m-d');
+        $to = trim((string) ($_GET['to'] ?? $today));
+        $from = trim((string) ($_GET['from'] ?? ''));
+        if (!self::valid_date($to) || $to > $today || ($from !== '' && !self::valid_date($from))) {
+            $this->api->respond_error('Choose valid ledger dates.', 422);
+        }
+        if ($from === '') {
+            $first = $this->db->raw(
+                'SELECT DATE(MIN(created_at)) AS first_date FROM savings_transactions WHERE member_id = ?',
+                [(int) $member['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            $from = $first['first_date'] ?: $to;
+        }
+        if ($from > $to) {
+            $this->api->respond_error('The ledger start date must be on or before its end date.', 422);
+        }
+
+        $opening = $this->db->raw(
+            'SELECT balance_after FROM savings_transactions
+             WHERE member_id = ? AND created_at < ?
+             ORDER BY created_at DESC, id DESC LIMIT 1',
+            [(int) $member['id'], $from . ' 00:00:00']
+        )->fetch(PDO::FETCH_ASSOC);
+        $opening_cents = self::money_to_cents((string) ($opening['balance_after'] ?? '0.00'));
+        $transactions = $this->db->raw(
+            'SELECT id, type, amount, balance_after, reference_no, description, created_at
+             FROM savings_transactions
+             WHERE member_id = ? AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+             ORDER BY created_at ASC, id ASC',
+            [(int) $member['id'], $from . ' 00:00:00', $to . ' 00:00:00']
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $deposits_cents = 0;
+        $withdrawals_cents = 0;
+        foreach ($transactions as &$transaction) {
+            $amount_cents = self::money_to_cents((string) $transaction['amount']);
+            if ($transaction['type'] === 'deposit') {
+                $deposits_cents += $amount_cents;
+            } else {
+                $withdrawals_cents += $amount_cents;
+            }
+            $transaction['amount'] = self::format_cents($amount_cents);
+            $transaction['balance_after'] = self::format_cents(self::money_to_cents((string) $transaction['balance_after']));
+        }
+        unset($transaction);
+
+        $closing_cents = $transactions
+            ? self::money_to_cents((string) $transactions[count($transactions) - 1]['balance_after'])
+            : $opening_cents;
+        $this->api->respond([
+            'member' => [
+                'member_number' => $member['member_number'],
+                'full_name' => trim(implode(' ', array_filter([
+                    $member['first_name'],
+                    $member['middle_name'] ?? null,
+                    $member['last_name']
+                ]))),
+                'status' => $member['status']
+            ],
+            'period' => ['from' => $from, 'to' => $to],
+            'opening_balance' => self::format_cents($opening_cents),
+            'deposits_total' => self::format_cents($deposits_cents),
+            'withdrawals_total' => self::format_cents($withdrawals_cents),
+            'closing_balance' => self::format_cents($closing_cents),
+            'generated_at' => date('Y-m-d H:i:s'),
+            'transactions' => $transactions
+        ]);
+    }
+
     private function record(array $user)
     {
         $this->api->require_method('POST');
@@ -154,5 +246,11 @@ class ApiSavings extends Controller
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
+    }
+
+    private static function valid_date(string $date)
+    {
+        $parsed = DateTime::createFromFormat('!Y-m-d', $date);
+        return $parsed && $parsed->format('Y-m-d') === $date;
     }
 }

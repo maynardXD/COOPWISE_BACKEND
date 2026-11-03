@@ -77,6 +77,11 @@ $router->post('/api/payment-submissions/{submission_id}/review', 'ApiPayments::r
 $router->get('/api/admin/search', 'ApiPayments::admin_search');
 $router->get('/api/savings', 'ApiSavings::index');
 $router->post('/api/savings', 'ApiSavings::index');
+$router->get('/api/savings/ledger', 'ApiSavings::ledger');
+$router->get('/api/savings/ledger/{member_id}', 'ApiSavings::ledger')->where_number('member_id');
+$router->get('/api/member-card', 'ApiMemberCards::issue');
+$router->get('/api/members/{member_id}/card', 'ApiMemberCards::issue')->where_number('member_id');
+$router->get('/api/member-cards/verify', 'ApiMemberCards::verify');
 $router->get('/api/reports', 'ApiReports::index');
 $router->options('/api/loan-products', 'ApiHealth::index');
 $router->options('/api/loan-products/{product_id}', 'ApiHealth::index')->where_number('product_id');
@@ -94,6 +99,11 @@ $router->options('/api/payment-submissions/{submission_id}/screenshot', 'ApiHeal
 $router->options('/api/payment-submissions/{submission_id}/review', 'ApiHealth::index')->where_number('submission_id');
 $router->options('/api/admin/search', 'ApiHealth::index');
 $router->options('/api/savings', 'ApiHealth::index');
+$router->options('/api/savings/ledger', 'ApiHealth::index');
+$router->options('/api/savings/ledger/{member_id}', 'ApiHealth::index')->where_number('member_id');
+$router->options('/api/member-card', 'ApiHealth::index');
+$router->options('/api/members/{member_id}/card', 'ApiHealth::index')->where_number('member_id');
+$router->options('/api/member-cards/verify', 'ApiHealth::index');
 $router->options('/api/reports', 'ApiHealth::index');
 $router->get('/api/cooperative/cycles', 'ApiCooperative::cycles');
 $router->post('/api/cooperative/cycles', 'ApiCooperative::create_cycle');
