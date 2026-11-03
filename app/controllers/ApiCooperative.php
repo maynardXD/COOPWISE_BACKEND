@@ -156,19 +156,28 @@ class ApiCooperative extends Controller
             ->select('cc.id, cc.cycle_id, cc.member_id, cc.contribution_date, cc.amount, cc.reference_no, c.name AS cycle_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('cooperative_cycles c', 'c.id = cc.cycle_id')
             ->inner_join('members m', 'm.id = cc.member_id');
+        if ($member) {
+            $contribution_query->where('cc.member_id', (int) $member['id']);
+        }
+        $contributions = $contribution_query
+            ->order_by('cc.contribution_date', 'DESC')
+            ->get_all();
+
         $payout_query = $this->db->table('cooperative_payouts cp')
             ->select('cp.id, cp.cycle_id, cp.member_id, cp.payout_order, cp.payout_date, cp.amount, cp.reference_no, cp.status, cp.paid_at, c.name AS cycle_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('cooperative_cycles c', 'c.id = cp.cycle_id')
             ->inner_join('members m', 'm.id = cp.member_id');
         if ($member) {
-            $contribution_query->where('cc.member_id', (int) $member['id']);
             $payout_query->where('cp.member_id', (int) $member['id']);
         }
+        $payouts = $payout_query
+            ->order_by('cp.payout_date', 'DESC')
+            ->get_all();
 
         $this->api->respond([
             'cycles' => $cycles,
-            'contributions' => $contribution_query->order_by('cc.contribution_date', 'DESC')->get_all(),
-            'payouts' => $payout_query->order_by('cp.payout_date', 'DESC')->get_all(),
+            'contributions' => $contributions,
+            'payouts' => $payouts,
             'members' => $user['role'] === 'member' ? [] : $this->db->table('members')
                 ->select('id, member_number, first_name, last_name')
                 ->where('status', 'active')
