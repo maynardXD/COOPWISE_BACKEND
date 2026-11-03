@@ -23,15 +23,20 @@ class ApiPayments extends Controller
         }
         $this->api->require_method('GET');
 
+        $member = null;
+        if ($user['role'] === 'member') {
+            $member = $this->member_profile($user);
+        } else {
+            $this->require_staff($user);
+        }
+
         $query = $this->db->table('payment_submissions ps')
             ->select('ps.id, ps.member_id, ps.loan_id, ps.cycle_id, ps.category, ps.amount, ps.reference_no, ps.storage_name, ps.status, ps.review_note, ps.created_at, ps.reviewed_at, l.loan_code, c.name AS cycle_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('members m', 'm.id = ps.member_id')
             ->left_join('loans l', 'l.id = ps.loan_id')
             ->left_join('cooperative_cycles c', 'c.id = ps.cycle_id');
-        if ($user['role'] === 'member') {
-            $query->where('ps.member_id', (int) $this->member_profile($user)['id']);
-        } else {
-            $this->require_staff($user);
+        if ($member) {
+            $query->where('ps.member_id', (int) $member['id']);
         }
         $submissions = $query->order_by('ps.created_at', 'DESC')->get_all();
         foreach ($submissions as &$submission) {

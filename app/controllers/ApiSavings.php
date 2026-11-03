@@ -23,15 +23,16 @@ class ApiSavings extends Controller
         }
         $this->api->require_method('GET');
 
+        $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
+        if (!$member) {
+            $this->require_staff($user);
+        }
+
         $query = $this->db->table('savings_transactions s')
             ->select('s.id, s.member_id, s.type, s.amount, s.balance_after, s.reference_no, s.description, s.created_at, m.member_number, m.first_name, m.last_name')
             ->inner_join('members m', 'm.id = s.member_id');
-        $member = null;
-        if ($user['role'] === 'member') {
-            $member = $this->member_profile($user);
+        if ($member) {
             $query->where('s.member_id', (int) $member['id']);
-        } else {
-            $this->require_staff($user);
         }
         $transactions = $query->order_by('s.created_at', 'DESC')->get_all();
         $balance = null;

@@ -21,13 +21,17 @@ class ApiLoans extends Controller
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
         $readiness = null;
-        $query = $this->db->table('loan_types')
-            ->select('id, name, description, interest_rate, max_amount, max_term_months, status');
         if ($user['role'] === 'member') {
-            $readiness = $this->latest_readiness((int) $this->member_profile($user)['id']);
+            $member = $this->member_profile($user);
+            $readiness = $this->latest_readiness((int) $member['id']);
             if (!$readiness || $readiness['status'] !== 'approved') {
                 $this->api->respond(['products' => [], 'loan_readiness' => $readiness]);
             }
+        }
+
+        $query = $this->db->table('loan_types')
+            ->select('id, name, description, interest_rate, max_amount, max_term_months, status');
+        if ($user['role'] === 'member') {
             $query->where('status', 'active')->where('max_amount', '>', 0);
         }
         $this->api->respond(['products' => $query->order_by('name', 'ASC')->get_all(), 'loan_readiness' => $readiness]);
@@ -72,12 +76,12 @@ class ApiLoans extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         $query = $this->db->table('loans l')
             ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
             ->inner_join('members m', 'm.id = l.member_id');
-        if ($user['role'] === 'member') {
-            $member = $this->member_profile($user);
+        if ($member) {
             $query->where('l.member_id', (int) $member['id']);
         }
         $this->api->respond(['loans' => $query->order_by('l.created_at', 'DESC')->get_all()]);
@@ -344,12 +348,13 @@ class ApiLoans extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         $query = $this->db->table('loan_payments lp')
             ->select('lp.id, lp.loan_id, lp.member_id, lp.amount_paid, lp.payment_method, lp.reference_no, lp.payment_date, l.loan_code, m.first_name, m.last_name')
             ->inner_join('loans l', 'l.id = lp.loan_id')
             ->inner_join('members m', 'm.id = lp.member_id');
-        if ($user['role'] === 'member') {
-            $query->where('lp.member_id', (int) $this->member_profile($user)['id']);
+        if ($member) {
+            $query->where('lp.member_id', (int) $member['id']);
         }
         $this->api->respond(['payments' => $query->order_by('lp.payment_date', 'DESC')->get_all()]);
     }
