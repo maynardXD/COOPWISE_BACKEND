@@ -25,6 +25,12 @@ class ApiCooperative extends Controller
             'cooperative_contributions',
             'cooperative_payouts'
         ];
+        $required_columns = [
+            'cooperative_cycles' => ['id', 'name', 'daily_contribution', 'start_date', 'status', 'created_at'],
+            'cooperative_cycle_members' => ['cycle_id', 'member_id', 'payout_order'],
+            'cooperative_contributions' => ['id', 'cycle_id', 'member_id', 'contribution_date', 'amount', 'reference_no', 'recorded_by_user_id'],
+            'cooperative_payouts' => ['id', 'cycle_id', 'member_id', 'payout_order', 'payout_date', 'amount', 'reference_no', 'status', 'paid_at']
+        ];
         $schema = $this->db->raw(
             'SELECT table_name, column_name FROM information_schema.columns
              WHERE table_schema = DATABASE() AND table_name IN (?, ?, ?, ?)',
@@ -36,26 +42,6 @@ class ApiCooperative extends Controller
             'SELECT DATABASE() AS active_database, CURRENT_USER() AS authenticated_account,
                     USER() AS connection_account, @@hostname AS server_hostname, @@port AS server_port'
         )->fetch(PDO::FETCH_ASSOC);
-        if ($missing_tables) {
-            error_log(
-                'CoopWise cooperative API schema is incomplete; MySQL connection: '
-                . json_encode($connection_info)
-                . '; tables visible in information_schema: '
-                . implode(', ', $found_tables)
-                . '; missing tables: '
-                . implode(', ', $missing_tables)
-            );
-            $this->api->respond_error(
-                'The API database is missing the Daily Paluwagan tables. Check Render DB_HOST, DB_DATABASE, and DB_USERNAME against the database where the migration was applied.',
-                503
-            );
-        }
-        $required_columns = [
-            'cooperative_cycles' => ['id', 'name', 'daily_contribution', 'start_date', 'status', 'created_at'],
-            'cooperative_cycle_members' => ['cycle_id', 'member_id', 'payout_order'],
-            'cooperative_contributions' => ['id', 'cycle_id', 'member_id', 'contribution_date', 'amount', 'reference_no', 'recorded_by_user_id'],
-            'cooperative_payouts' => ['id', 'cycle_id', 'member_id', 'payout_order', 'payout_date', 'amount', 'reference_no', 'status', 'paid_at']
-        ];
         $missing_columns = [];
         foreach ($required_columns as $table => $columns) {
             $found_columns = array_column(
@@ -68,12 +54,60 @@ class ApiCooperative extends Controller
                 $missing_columns[] = $table . '.' . $column;
             }
         }
+
+        if ($missing_tables || $missing_columns) {
+            $missing_tables = [];
+            $missing_columns = [];
+            $probe_errors = [];
+            foreach ($required_columns as $table => $columns) {
+                $quoted_columns = array_map(static function ($column) {
+                    return '`' . $column . '`';
+                }, $columns);
+                try {
+                    $this->db->raw(
+                        'SELECT ' . implode(', ', $quoted_columns) . ' FROM `' . $table . '` LIMIT 0'
+                    );
+                } catch (PDOException $exception) {
+                    $error_info = $exception->errorInfo;
+                    $sql_state = (string) ($error_info[0] ?? $exception->getCode());
+                    $driver_code = (int) ($error_info[1] ?? 0);
+                    if ($sql_state === '42S02' || $driver_code === 1146) {
+                        $missing_tables[] = $table;
+                    } elseif ($sql_state === '42S22' || $driver_code === 1054) {
+                        preg_match("/Unknown column '([^']+)'/i", $exception->getMessage(), $matches);
+                        $missing_columns[] = $table . '.' . ($matches[1] ?? 'unknown');
+                    } else {
+                        throw $exception;
+                    }
+                    $probe_errors[] = $exception->getMessage();
+                }
+            }
+            $missing_tables = array_values(array_unique($missing_tables));
+            $missing_columns = array_values(array_unique($missing_columns));
+        }
+
+        if ($missing_tables) {
+            error_log(
+                'CoopWise cooperative API schema is incomplete; MySQL connection: '
+                . json_encode($connection_info)
+                . '; tables visible in information_schema: '
+                . implode(', ', $found_tables)
+                . '; missing tables: '
+                . implode(', ', $missing_tables)
+                . (empty($probe_errors) ? '' : '; direct checks: ' . implode(' | ', $probe_errors))
+            );
+            $this->api->respond_error(
+                'The API database is missing the Daily Paluwagan tables. Check Render DB_HOST, DB_DATABASE, and DB_USERNAME against the database where the migration was applied.',
+                503
+            );
+        }
         if ($missing_columns) {
             error_log(
                 'CoopWise cooperative API schema is incomplete; MySQL connection: '
                 . json_encode($connection_info)
                 . '; missing columns: '
                 . implode(', ', $missing_columns)
+                . (empty($probe_errors) ? '' : '; direct checks: ' . implode(' | ', $probe_errors))
             );
             $this->api->respond_error(
                 'The API database has incomplete Daily Paluwagan tables. Check Render DB_HOST, DB_DATABASE, and DB_USERNAME against the database where the migration was applied.',
