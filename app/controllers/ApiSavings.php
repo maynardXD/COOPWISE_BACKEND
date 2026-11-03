@@ -44,7 +44,41 @@ class ApiSavings extends Controller
             ->where('status', 'active')
             ->order_by('last_name', 'ASC')
             ->get_all();
-        $this->api->respond(['transactions' => $transactions, 'members' => $members, 'balance' => $balance]);
+        $this->api->respond([
+            'transactions' => $transactions,
+            'members' => $members,
+            'balance' => $balance,
+            'auto_pay_preferences' => $member ? [
+                'loan' => (bool) ($member['loan_autopay_enabled'] ?? false),
+                'paluwagan' => (bool) ($member['paluwagan_autopay_enabled'] ?? false)
+            ] : null
+        ]);
+    }
+
+    public function auto_pay_preferences()
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        $member = $this->member_profile($user);
+        $data = $this->api->body();
+        if (!array_key_exists('loan', $data) || !array_key_exists('paluwagan', $data)
+            || !is_bool($data['loan']) || !is_bool($data['paluwagan'])) {
+            $this->api->respond_error('Choose whether to enable each savings auto-payment option.', 422);
+        }
+        $updated = $this->db->table('members')
+            ->where('id', (int) $member['id'])
+            ->update([
+                'loan_autopay_enabled' => $data['loan'] ? 1 : 0,
+                'paluwagan_autopay_enabled' => $data['paluwagan'] ? 1 : 0,
+                'autopay_consent_updated_at' => date('Y-m-d H:i:s')
+            ]);
+        if ($updated === false) {
+            throw new RuntimeException('Savings auto-payment preferences could not be saved.');
+        }
+        $this->api->respond([
+            'message' => 'Savings auto-payment preferences saved.',
+            'auto_pay_preferences' => ['loan' => $data['loan'], 'paluwagan' => $data['paluwagan']]
+        ]);
     }
 
     public function ledger($member_id = null)

@@ -280,6 +280,33 @@ class ApiLoans extends Controller
                 throw new DomainException('This application has already been reviewed.');
             }
 
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $loan['member_id']])->fetch();
+            $savings_deposits = $this->db->table('savings_transactions')
+                ->select_sum('amount', 'total')
+                ->where('member_id', (int) $loan['member_id'])
+                ->where('type', 'deposit')
+                ->get();
+            $savings_withdrawals = $this->db->table('savings_transactions')
+                ->select_sum('amount', 'total')
+                ->where('member_id', (int) $loan['member_id'])
+                ->where('type', 'withdrawal')
+                ->get();
+            $savings_balance = self::money_to_cents((string) ($savings_deposits['total'] ?? '0'))
+                - self::money_to_cents((string) ($savings_withdrawals['total'] ?? '0'));
+            $disbursement_reference = 'CW-DISBURSE-' . $loan['loan_code'];
+            $disbursement_id = $this->db->table('savings_transactions')->insert([
+                'member_id' => (int) $loan['member_id'],
+                'type' => 'deposit',
+                'amount' => self::format_cents($principal),
+                'balance_after' => self::format_cents($savings_balance + $principal),
+                'reference_no' => $disbursement_reference,
+                'description' => 'Approved loan disbursement credited to savings.',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$disbursement_id) {
+                throw new RuntimeException('Loan was approved but its savings disbursement could not be recorded.');
+            }
+
             $approved_date = new DateTimeImmutable('today');
             $first_due_month = $approved_date->modify('first day of next month');
             $due_day = (int) $approved_date->format('j');
@@ -318,7 +345,7 @@ class ApiLoans extends Controller
             error_log('CoopWise API loan review failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'Application approved and monthly installments generated.']);
+        $this->api->respond(['message' => 'Application approved, the loan amount was credited to the member’s savings, and monthly installments were generated.']);
     }
 
     public function schedule($loan_id = null)
@@ -341,7 +368,30 @@ class ApiLoans extends Controller
             ->where('loan_id', $loan_id)
             ->order_by('due_date', 'ASC')
             ->get_all();
-        $this->api->respond(['loan' => $loan, 'schedule' => $schedule]);
+        $totals = ['principal' => 0, 'interest' => 0, 'due' => 0, 'paid' => 0];
+        $remaining = self::money_to_cents((string) $loan['current_balance']);
+        foreach ($schedule as &$installment) {
+            $principal = self::money_to_cents((string) $installment['principal_due']);
+            $interest = self::money_to_cents((string) $installment['interest_due']);
+            $due = self::money_to_cents((string) $installment['total_due']);
+            $paid = self::money_to_cents((string) $installment['paid_amount']);
+            $totals['principal'] += $principal;
+            $totals['interest'] += $interest;
+            $totals['due'] += $due;
+            $totals['paid'] += $paid;
+            $remaining = max(0, $remaining - max(0, $due - $paid));
+            $installment['remaining_after'] = self::format_cents($remaining);
+        }
+        unset($installment);
+        $this->api->respond([
+            'loan' => $loan,
+            'schedule' => $schedule,
+            'total_principal' => self::format_cents($totals['principal']),
+            'total_interest' => self::format_cents($totals['interest']),
+            'total_due' => self::format_cents($totals['due']),
+            'total_paid' => self::format_cents($totals['paid']),
+            'generated_at' => date('Y-m-d H:i:s')
+        ]);
     }
 
     public function payments()
@@ -374,7 +424,12 @@ class ApiLoans extends Controller
 
         $this->db->transaction();
         try {
-            $loan = $this->db->table('loans')->where('id', $loan_id)->get();
+            $loan_identity = $this->db->table('loans')->select('member_id')->where('id', $loan_id)->get();
+            if (!$loan_identity) {
+                throw new DomainException('Loan is not active or payment exceeds the remaining balance.');
+            }
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $loan_identity['member_id']])->fetch();
+            $loan = $this->db->raw('SELECT * FROM loans WHERE id = ? FOR UPDATE', [$loan_id])->fetch(PDO::FETCH_ASSOC);
             $balance = $loan ? self::money_to_cents((string) $loan['current_balance']) : false;
             if (!$loan || !in_array($loan['status'], ['approved', 'active'], true) || $balance === false || $amount > $balance) {
                 throw new DomainException('Loan is not active or payment exceeds the remaining balance.');

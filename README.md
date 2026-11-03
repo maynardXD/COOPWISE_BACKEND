@@ -27,6 +27,8 @@ reuse its branding, images, or website copy.
    to add the loan-product limit and daily cooperative-cycle tables.
    Import `database/coopwise_documents_payments_upgrade.sql` for both new and
    existing databases to add protected loan documents and payment submissions.
+   Run `database/coopwise_financial_workflows_upgrade.sql` to add withdrawal
+   requests and member-controlled savings auto-payment preferences.
    Existing accounts must have an email or linked member phone number to sign
    in after the registration upgrade. Do not drop the existing tables.
 5. Copy `.env.example` to `.env` and set your local database values if they
@@ -70,8 +72,9 @@ constraint. Make a database backup before applying it.
   saves the rate on the application and creates monthly installments using
   flat interest on the original principal: `principal × monthly rate × term`.
   No tax or additional fee is added. The rate is a local demo setting, not a
-  published CARD Bank rate. Staff record payments; members can view their own
-  application and installment schedule.
+  published CARD Bank rate. Members can preview the estimated schedule before
+  applying and print/save their final approved schedule as PDF. Staff record
+  payments; members can view their own application and installment schedule.
 - Staff create a daily cooperative cycle, set the contribution amount, enroll
   members, assign payout order, and activate it. Each enrolled member makes one
   contribution per day; staff record contributions after receiving them.
@@ -88,6 +91,25 @@ constraint. Make a database backup before applying it.
   selected period with opening/closing balances and transaction totals;
   `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
   `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
+- Loan approval credits the approved principal to the member's savings ledger
+  within the same database transaction that creates the amortization schedule.
+  Members can request a GCash withdrawal, confirm the account name and matching
+  mobile number, and reserve an amount from their savings. Staff manually send
+  the funds, attach a private receipt, and mark the request complete; rejecting
+  a request refunds the reserved amount. This workflow does not contact GCash
+  or initiate an electronic transfer. Members see only their own history and
+  receipts; staff can search, filter, sort, and page through all requests.
+- Members may separately opt in to loan-installment and/or daily Paluwagan
+  payments from savings. Both preferences are off by default. When enabled,
+  `scripts/daily_savings_auto_pay.php` processes due amounts and records the
+  savings withdrawal together with its loan-payment or Paluwagan contribution.
+  If loan savings are insufficient, an available partial amount is applied to
+  the earliest due installment; a Paluwagan contribution is skipped if its full
+  daily amount is unavailable. The script must be configured as a recurring
+  daily CLI job before members enable this feature. Schedule it after the
+  cooperative's business-day boundary, use the same database and TLS settings
+  as the web service, and monitor the job's JSON output and server error log.
+  The script never initiates an external payment.
 - Members can issue their own printable ID card from `/api/member-card`, while
   staff can issue a selected member's card through
   `/api/members/{member_id}/card`. The QR uses a signed internal member
@@ -126,9 +148,13 @@ JWT authentication, explicit API routes, and the framework database query
 builder. It supports registration/sign-in, a searchable staff member directory,
 date-filtered printable savings ledgers and signed QR member ID cards, staff
 reports, member loan-document review before offer
-access, loan applications and schedules, payment evidence submission and review,
-staff loan product/review/payment workflows, and daily Paluwagan cycle
-enrollment, contributions, payout readiness, and staff payout confirmation.
+access, loan application schedule previews and printable approved schedules,
+payment evidence submission and review, staff loan product/review/payment
+workflows, and daily Paluwagan cycle enrollment, contributions, payout
+readiness, and staff payout confirmation. Loan approvals credit the principal
+to savings. Members may request and track manual GCash withdrawals; staff attach
+transfer receipts and complete or reject/refund requests. Members can also
+explicitly opt in to loan or Paluwagan auto-pay from savings.
 Other legacy pages remain in the LavaLust app and have not yet been migrated to
 the separate frontend.
 
@@ -140,8 +166,12 @@ the separate frontend.
    a paid web-service plan.
 2. Provide an external MySQL-compatible database (Render does not supply a
    managed MySQL database). Import `coopwise_schema.sql` and all additive
-   upgrade scripts, including `coopwise_documents_payments_upgrade.sql`, into
-   it using a trusted database client. For Aiven MySQL,
+   upgrade scripts, including `coopwise_loans_cooperative_upgrade.sql`,
+   `coopwise_documents_payments_upgrade.sql`, and
+   `coopwise_financial_workflows_upgrade.sql`, into it using a trusted database
+   client. For an existing hosted database where `/api/cooperative/cycles`
+   returns a schema-related error, back up the database and apply
+   `coopwise_loans_cooperative_upgrade.sql` before retrying. For Aiven MySQL,
    upload its CA certificate in Render's **Secret Files** as
    `/etc/secrets/aiven-ca.pem`; set `DB_SSL_CA` to that path. The LavaLust
    database connection uses PDO MySQL TLS and verifies the server certificate.
@@ -151,6 +181,15 @@ the separate frontend.
    of at least 32 characters. Set `COOPWISE_ALLOWED_ORIGINS` to the exact
    deployed Vercel origin; do not use `*`.
 4. Configure `/api/health` as Render's health-check path.
+
+Savings auto-pay is disabled unless each member opts in. To run it in a hosted
+deployment, configure a separate daily Render Cron Job from this repository's
+Docker image with start command `php /var/www/html/scripts/daily_savings_auto_pay.php`.
+Give the job the same `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`,
+`DB_PASSWORD`, and `DB_SSL_CA` environment and CA Secret File as the web service.
+Render schedules use UTC; choose the run time to match the cooperative's
+business-day boundary. Review Render's current Cron Job pricing before creating
+one; the existing free web service does not run this script automatically.
 
 The free web service is suitable for a school demo, not a production banking
 service. Render spins it down after 15 minutes without traffic; the first

@@ -77,6 +77,13 @@ $router->post('/api/payment-submissions/{submission_id}/review', 'ApiPayments::r
 $router->get('/api/admin/search', 'ApiPayments::admin_search');
 $router->get('/api/savings', 'ApiSavings::index');
 $router->post('/api/savings', 'ApiSavings::index');
+$router->post('/api/savings/auto-pay', 'ApiSavings::auto_pay_preferences');
+$router->get('/api/savings/withdrawals', 'ApiSavingsWithdrawals::index');
+$router->post('/api/savings/withdrawals', 'ApiSavingsWithdrawals::index');
+$router->post('/api/savings/withdrawals/{request_id}/receipt', 'ApiSavingsWithdrawals::upload_receipt')->where_number('request_id');
+$router->get('/api/savings/withdrawals/{request_id}/receipt', 'ApiSavingsWithdrawals::receipt')->where_number('request_id');
+$router->post('/api/savings/withdrawals/{request_id}/complete', 'ApiSavingsWithdrawals::complete')->where_number('request_id');
+$router->post('/api/savings/withdrawals/{request_id}/reject', 'ApiSavingsWithdrawals::reject')->where_number('request_id');
 $router->get('/api/savings/ledger', 'ApiSavings::ledger');
 $router->get('/api/savings/ledger/{member_id}', 'ApiSavings::ledger')->where_number('member_id');
 $router->get('/api/member-card', 'ApiMemberCards::issue');
@@ -99,6 +106,11 @@ $router->options('/api/payment-submissions/{submission_id}/screenshot', 'ApiHeal
 $router->options('/api/payment-submissions/{submission_id}/review', 'ApiHealth::index')->where_number('submission_id');
 $router->options('/api/admin/search', 'ApiHealth::index');
 $router->options('/api/savings', 'ApiHealth::index');
+$router->options('/api/savings/auto-pay', 'ApiHealth::index');
+$router->options('/api/savings/withdrawals', 'ApiHealth::index');
+$router->options('/api/savings/withdrawals/{request_id}/receipt', 'ApiHealth::index')->where_number('request_id');
+$router->options('/api/savings/withdrawals/{request_id}/complete', 'ApiHealth::index')->where_number('request_id');
+$router->options('/api/savings/withdrawals/{request_id}/reject', 'ApiHealth::index')->where_number('request_id');
 $router->options('/api/savings/ledger', 'ApiHealth::index');
 $router->options('/api/savings/ledger/{member_id}', 'ApiHealth::index')->where_number('member_id');
 $router->options('/api/member-card', 'ApiHealth::index');

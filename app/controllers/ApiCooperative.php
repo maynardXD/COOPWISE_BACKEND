@@ -19,6 +19,25 @@ class ApiCooperative extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $required_tables = [
+            'cooperative_cycles',
+            'cooperative_cycle_members',
+            'cooperative_contributions',
+            'cooperative_payouts'
+        ];
+        $schema = $this->db->raw(
+            'SELECT table_name FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name IN (?, ?, ?, ?)',
+            $required_tables
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $missing_tables = array_values(array_diff($required_tables, $schema));
+        if ($missing_tables) {
+            error_log('CoopWise cooperative API schema is incomplete; missing tables: ' . implode(', ', $missing_tables));
+            $this->api->respond_error(
+                'Daily Paluwagan is not configured in the database yet. Apply database/coopwise_loans_cooperative_upgrade.sql, then retry.',
+                503
+            );
+        }
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         $query = $this->db->table('cooperative_cycles c')
             ->select('c.id, c.name, c.daily_contribution, c.start_date, c.status, c.created_at');
