@@ -18,6 +18,7 @@ class ApiSavingsWithdrawals extends Controller
     public function index()
     {
         $user = $this->authenticated_user();
+        $this->require_workflow_schema();
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $this->request($user);
         }
@@ -100,6 +101,7 @@ class ApiSavingsWithdrawals extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $this->require_workflow_schema();
         $request = $this->db->table('savings_withdrawal_requests')
             ->where('id', (int) $request_id)
             ->get();
@@ -119,6 +121,7 @@ class ApiSavingsWithdrawals extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
+        $this->require_workflow_schema();
         $this->require_staff($user);
         $id = filter_var($request_id, FILTER_VALIDATE_INT);
         if (!$id || $id < 1) {
@@ -168,6 +171,7 @@ class ApiSavingsWithdrawals extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
+        $this->require_workflow_schema();
         $this->require_staff($user);
         $id = filter_var($request_id, FILTER_VALIDATE_INT);
         if (!$id || $id < 1) {
@@ -214,6 +218,7 @@ class ApiSavingsWithdrawals extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
+        $this->require_workflow_schema();
         $this->require_staff($user);
         $id = filter_var($request_id, FILTER_VALIDATE_INT);
         $note = trim((string) (($this->api->body())['admin_note'] ?? ''));
@@ -273,6 +278,7 @@ class ApiSavingsWithdrawals extends Controller
     private function request(array $user)
     {
         $this->api->require_method('POST');
+        $this->require_workflow_schema();
         $member = $this->member_profile($user);
         $data = $this->api->body();
         $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
@@ -393,6 +399,22 @@ class ApiSavingsWithdrawals extends Controller
             ->get();
         return self::money_to_cents((string) ($deposits['total'] ?? '0'))
             - self::money_to_cents((string) ($withdrawals['total'] ?? '0'));
+    }
+
+    private function require_workflow_schema()
+    {
+        $table = $this->db->raw(
+            'SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = ?',
+            ['savings_withdrawal_requests']
+        )->fetchColumn();
+        if ((int) $table !== 1) {
+            error_log('CoopWise withdrawal schema is incomplete; savings_withdrawal_requests table is missing.');
+            $this->api->respond_error(
+                'GCash savings withdrawals are not configured in the database yet. Apply database/coopwise_financial_workflows_upgrade.sql, then retry.',
+                503
+            );
+        }
     }
 
     private function authenticated_user()

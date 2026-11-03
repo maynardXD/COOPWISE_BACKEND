@@ -59,6 +59,20 @@ class ApiSavings extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
+        $columns = $this->db->raw(
+            'SELECT column_name FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = ?',
+            ['members']
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $required_columns = ['loan_autopay_enabled', 'paluwagan_autopay_enabled', 'autopay_consent_updated_at'];
+        $missing_columns = array_values(array_diff($required_columns, $columns));
+        if ($missing_columns) {
+            error_log('CoopWise auto-pay schema is incomplete; missing members columns: ' . implode(', ', $missing_columns));
+            $this->api->respond_error(
+                'Savings auto-pay is not configured in the database yet. Apply database/coopwise_financial_workflows_upgrade.sql, then retry.',
+                503
+            );
+        }
         $member = $this->member_profile($user);
         $data = $this->api->body();
         if (!array_key_exists('loan', $data) || !array_key_exists('paluwagan', $data)

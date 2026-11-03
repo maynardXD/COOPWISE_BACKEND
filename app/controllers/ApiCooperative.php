@@ -26,15 +26,41 @@ class ApiCooperative extends Controller
             'cooperative_payouts'
         ];
         $schema = $this->db->raw(
-            'SELECT table_name FROM information_schema.tables
+            'SELECT table_name, column_name FROM information_schema.columns
              WHERE table_schema = DATABASE() AND table_name IN (?, ?, ?, ?)',
             $required_tables
-        )->fetchAll(PDO::FETCH_COLUMN);
-        $missing_tables = array_values(array_diff($required_tables, $schema));
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $found_tables = array_unique(array_column($schema, 'table_name'));
+        $missing_tables = array_values(array_diff($required_tables, $found_tables));
         if ($missing_tables) {
             error_log('CoopWise cooperative API schema is incomplete; missing tables: ' . implode(', ', $missing_tables));
             $this->api->respond_error(
                 'Daily Paluwagan is not configured in the database yet. Apply database/coopwise_loans_cooperative_upgrade.sql, then retry.',
+                503
+            );
+        }
+        $required_columns = [
+            'cooperative_cycles' => ['id', 'name', 'daily_contribution', 'start_date', 'status', 'created_at'],
+            'cooperative_cycle_members' => ['cycle_id', 'member_id', 'payout_order'],
+            'cooperative_contributions' => ['id', 'cycle_id', 'member_id', 'contribution_date', 'amount', 'reference_no', 'recorded_by_user_id'],
+            'cooperative_payouts' => ['id', 'cycle_id', 'member_id', 'payout_order', 'payout_date', 'amount', 'reference_no', 'status', 'paid_at']
+        ];
+        $missing_columns = [];
+        foreach ($required_columns as $table => $columns) {
+            $found_columns = array_column(
+                array_filter($schema, static function ($row) use ($table) {
+                    return $row['table_name'] === $table;
+                }),
+                'column_name'
+            );
+            foreach (array_diff($columns, $found_columns) as $column) {
+                $missing_columns[] = $table . '.' . $column;
+            }
+        }
+        if ($missing_columns) {
+            error_log('CoopWise cooperative API schema is incomplete; missing columns: ' . implode(', ', $missing_columns));
+            $this->api->respond_error(
+                'Daily Paluwagan database tables are incomplete. Reapply database/coopwise_loans_cooperative_upgrade.sql, then retry.',
                 503
             );
         }
