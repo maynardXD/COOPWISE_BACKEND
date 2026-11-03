@@ -32,11 +32,16 @@ class ApiCooperative extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
         $found_tables = array_unique(array_column($schema, 'table_name'));
         $missing_tables = array_values(array_diff($required_tables, $found_tables));
-        $active_database = $this->db->raw('SELECT DATABASE()')->fetchColumn();
+        $connection_info = $this->db->raw(
+            'SELECT DATABASE() AS active_database, CURRENT_USER() AS authenticated_account,
+                    USER() AS connection_account, @@hostname AS server_hostname, @@port AS server_port'
+        )->fetch(PDO::FETCH_ASSOC);
         if ($missing_tables) {
             error_log(
-                'CoopWise cooperative API schema is incomplete; active database: '
-                . (string) $active_database
+                'CoopWise cooperative API schema is incomplete; MySQL connection: '
+                . json_encode($connection_info)
+                . '; tables visible in information_schema: '
+                . implode(', ', $found_tables)
                 . '; missing tables: '
                 . implode(', ', $missing_tables)
             );
@@ -65,8 +70,8 @@ class ApiCooperative extends Controller
         }
         if ($missing_columns) {
             error_log(
-                'CoopWise cooperative API schema is incomplete; active database: '
-                . (string) $active_database
+                'CoopWise cooperative API schema is incomplete; MySQL connection: '
+                . json_encode($connection_info)
                 . '; missing columns: '
                 . implode(', ', $missing_columns)
             );
