@@ -262,26 +262,29 @@ class ApiCheckout extends Controller
                     throw new RuntimeException('Completed webhook did not include a payment reference or session identifier.');
                 }
                 $transaction = $transaction_query->get();
-                if (!$transaction || empty($transaction['provider_checkout_id'])
+                if (!$transaction) {
+                    error_log('CoopWise acknowledged Xendit completed event without a matching payment transaction: ' . $event_id);
+                } elseif (empty($transaction['provider_checkout_id'])
                     || ($session_id !== '' && !hash_equals((string) $transaction['provider_checkout_id'], $session_id))) {
                     throw new RuntimeException('Completed Xendit session does not match a CoopWise transaction.');
+                } else {
+                    $session = $this->xendit_request(
+                        'GET',
+                        '/sessions/' . rawurlencode($transaction['provider_checkout_id'])
+                    );
+                    if (strtoupper((string) ($session['status'] ?? '')) !== 'COMPLETED') {
+                        throw new RuntimeException('Xendit has not confirmed the payment session as completed.');
+                    }
+                    [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($session);
+                    $this->apply_paid_checkout(
+                        (int) $transaction['id'],
+                        (string) $transaction['provider_checkout_id'],
+                        $paid_amount,
+                        $paid_currency,
+                        !empty($session['payment_request_id']) ? (string) $session['payment_request_id'] : null,
+                        (string) ($session['reference_id'] ?? '')
+                    );
                 }
-                $session = $this->xendit_request(
-                    'GET',
-                    '/sessions/' . rawurlencode($transaction['provider_checkout_id'])
-                );
-                if (strtoupper((string) ($session['status'] ?? '')) !== 'COMPLETED') {
-                    throw new RuntimeException('Xendit has not confirmed the payment session as completed.');
-                }
-                [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($session);
-                $this->apply_paid_checkout(
-                    (int) $transaction['id'],
-                    (string) $transaction['provider_checkout_id'],
-                    $paid_amount,
-                    $paid_currency,
-                    !empty($session['payment_request_id']) ? (string) $session['payment_request_id'] : null,
-                    (string) ($session['reference_id'] ?? '')
-                );
             } elseif ($event_type === 'payment_session.expired') {
                 $session_id = (string) ($event_data['payment_session_id'] ?? $event_data['id'] ?? '');
                 $expired_query = $this->db->table('payment_transactions');
