@@ -51,6 +51,15 @@ class ApiCheckout extends Controller
         $member = $this->member_profile($user);
         $this->require_payment_schema();
         $this->require_xendit_config();
+        $frontend_url = rtrim((string) getenv('COOPWISE_FRONTEND_URL'), '/');
+        $frontend_scheme = strtolower((string) parse_url($frontend_url, PHP_URL_SCHEME));
+        $allowed_schemes = strtolower((string) getenv('APP_ENV')) === 'production' ? ['https'] : ['https', 'http'];
+        if (!filter_var($frontend_url, FILTER_VALIDATE_URL) || !in_array($frontend_scheme, $allowed_schemes, true)) {
+            $this->api->respond_error(
+                'Online payments are not configured correctly. Please contact cooperative staff; no payment was started.',
+                503
+            );
+        }
         $data = $this->api->body();
         $purpose = trim((string) ($data['purpose'] ?? ''));
         $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
@@ -108,12 +117,7 @@ class ApiCheckout extends Controller
         }
 
         try {
-            $frontend_url = rtrim((string) getenv('COOPWISE_FRONTEND_URL'), '/');
-            $frontend_scheme = strtolower((string) parse_url($frontend_url, PHP_URL_SCHEME));
-            $allowed_schemes = strtolower((string) getenv('APP_ENV')) === 'production' ? ['https'] : ['https', 'http'];
-            if (!filter_var($frontend_url, FILTER_VALIDATE_URL) || !in_array($frontend_scheme, $allowed_schemes, true)) {
-                throw new RuntimeException('COOPWISE_FRONTEND_URL is not configured with a valid URL.');
-            }
+            $xendit_started_at = microtime(true);
             $payload = [
                 'reference_id' => $reference,
                 'session_type' => 'PAY',
@@ -124,7 +128,12 @@ class ApiCheckout extends Controller
                 'success_return_url' => $frontend_url . '/?payment=success&transaction=' . (int) $transaction_id,
                 'cancel_return_url' => $frontend_url . '/?payment=cancelled&transaction=' . (int) $transaction_id
             ];
+            $xendit_request_started_at = microtime(true);
             $response = $this->xendit_request('POST', '/sessions', $payload);
+            $xendit_request_elapsed = microtime(true) - $xendit_request_started_at;
+            if ($xendit_request_elapsed >= 2) {
+                error_log(sprintf('CoopWise Xendit session request took %.2f seconds.', $xendit_request_elapsed));
+            }
             $session_id = (string) ($response['payment_session_id'] ?? '');
             $checkout_url = (string) ($response['payment_link_url'] ?? '');
             if ($session_id === '' || !filter_var($checkout_url, FILTER_VALIDATE_URL)
@@ -146,7 +155,12 @@ class ApiCheckout extends Controller
                     'status' => 'needs_review',
                     'review_note' => 'Checkout setup did not return a confirmed result. Contact staff before retrying.'
                 ]);
-            error_log('CoopWise Xendit checkout creation failed: ' . $error->getMessage());
+            $elapsed_seconds = isset($xendit_started_at) ? microtime(true) - $xendit_started_at : 0;
+            error_log(sprintf(
+                'CoopWise Xendit checkout creation failed after %.2f seconds: %s',
+                $elapsed_seconds,
+                $error->getMessage()
+            ));
             $this->api->respond_error('Xendit checkout could not be started. Please try again later.', 502);
         }
 

@@ -222,7 +222,9 @@ the separate frontend.
    dashboard. Set `APP_BASE_URL` to the Render service URL, database credentials
    to the hosted MySQL values, and all three secrets to distinct random values
    of at least 32 characters. Set `COOPWISE_ALLOWED_ORIGINS` to the exact
-   deployed Vercel origin; do not use `*`. Keep `XENDIT_MODE=test` while
+   deployed Vercel origin; set `COOPWISE_FRONTEND_URL` to that same origin
+   (for example `https://your-app.vercel.app`, without `/api`); do not use `*`
+   for allowed origins. Keep `XENDIT_MODE=test` while
    testing, and set `XENDIT_SECRET_KEY` and `XENDIT_WEBHOOK_TOKEN` using
    test credentials from Xendit. Set `BREVO_API_KEY` and the verified
    `BREVO_SENDER_EMAIL` to enable password-reset email. Do not put secret keys
