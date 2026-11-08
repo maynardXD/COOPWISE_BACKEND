@@ -4,7 +4,7 @@
 <div class="panel">
     <?php if (!empty($error)): ?><div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
     <?php if (!empty($success)): ?><div class="success-message"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-    <p class="muted">Each enrolled member contributes the same amount once per day. After everyone contributes, the pooled amount becomes ready for the next member in payout order. Members continue contributing after their own payout until everyone has received one turn.</p>
+    <p class="muted">Members pay the same daily contribution through PayMongo checkout. After PayMongo confirms everyone's contribution, the pooled amount becomes ready for the next member in payout order; staff still confirm when the payout is disbursed.</p>
 
     <?php if (!empty($can_manage)): ?>
         <details style="margin-bottom: 20px;">
@@ -69,16 +69,17 @@
                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="cycle_id" value="<?= (int) $cycle['id'] ?>">
                     <div>
-                        <label for="member_cycle_<?= (int) $cycle['id'] ?>">Add member</label>
-                        <select id="member_cycle_<?= (int) $cycle['id'] ?>" name="member_id" required>
-                            <option value="">Choose a member</option>
+                        <label for="member_cycle_<?= (int) $cycle['id'] ?>">Select members (their payout order will be randomized)</label>
+                        <select id="member_cycle_<?= (int) $cycle['id'] ?>" name="member_ids[]" multiple required>
                             <?php foreach (($members ?? []) as $member): ?>
-                                <option value="<?= (int) $member['id'] ?>"><?= htmlspecialchars($member['member_number'] . ' — ' . $member['first_name'] . ' ' . $member['last_name'], ENT_QUOTES, 'UTF-8') ?></option>
+                                <?php if (!in_array((int) $member['id'], array_map('intval', array_column($cycle['members'], 'member_id')), true)): ?>
+                                    <option value="<?= (int) $member['id'] ?>"><?= htmlspecialchars($member['member_number'] . ' — ' . $member['first_name'] . ' ' . $member['last_name'], ENT_QUOTES, 'UTF-8') ?></option>
+                                <?php endif; ?>
                             <?php endforeach; ?>
                         </select>
+                        <small>Hold Ctrl (Windows) or Command (Mac) while clicking to select multiple members.</small>
                     </div>
-                    <div><label for="order_cycle_<?= (int) $cycle['id'] ?>">Payout order (1 to <?= (int) $cycle['member_count'] + 1 ?>)</label><input id="order_cycle_<?= (int) $cycle['id'] ?>" name="payout_order" type="number" min="1" max="999" required></div>
-                    <div style="align-self:end;"><button class="btn btn-secondary" type="submit">Add member</button></div>
+                    <div style="align-self:end;"><button class="btn btn-secondary" type="submit">Add selected members</button></div>
                 </form>
                 <form method="post" action="<?= BASE_URL ?>cooperative/cycles/activate">
                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
@@ -88,23 +89,8 @@
             <?php endif; ?>
 
             <?php if ($cycle['status'] === 'active' && (empty($cycle['has_ready_payout'])) && date('Y-m-d') >= $cycle['start_date']): ?>
-                <?php if (!empty($can_manage)): ?>
-                    <form method="post" action="<?= BASE_URL ?>cooperative/contributions/record" class="form-grid" style="margin-top:16px;">
-                        <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
-                        <input type="hidden" name="cycle_id" value="<?= (int) $cycle['id'] ?>">
-                        <div>
-                            <label for="contributor_<?= (int) $cycle['id'] ?>">Record contribution received from</label>
-                            <select id="contributor_<?= (int) $cycle['id'] ?>" name="member_id" required>
-                                <option value="">Choose an enrolled member</option>
-                                <?php foreach ($cycle['members'] as $cycle_member): ?>
-                                    <option value="<?= (int) $cycle_member['member_id'] ?>"><?= htmlspecialchars($cycle_member['member_number'] . ' — ' . $cycle_member['first_name'] . ' ' . $cycle_member['last_name'], ENT_QUOTES, 'UTF-8') ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div style="align-self:end;"><button class="btn btn-primary" type="submit">Record today's contribution</button></div>
-                    </form>
-                <?php elseif ($own_enrollment): ?>
-                    <p class="muted">Please give today's contribution to cooperative staff so they can record the received payment.</p>
+                <?php if ($own_enrollment): ?>
+                    <p class="muted">Use the Payments page in the CoopWise frontend to make today's contribution through PayMongo.</p>
                 <?php endif; ?>
             <?php endif; ?>
         </section>

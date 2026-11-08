@@ -89,8 +89,7 @@ class ApiReports extends Controller
                 'loan_applications' => $applications_by_status,
                 'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', '')
             ],
-            'loan_statuses' => $loan_statuses,
-            'pending_payment_submissions' => (int) $this->db->table('payment_submissions')->where('status', 'pending')->count()
+            'loan_statuses' => $loan_statuses
         ]);
     }
 

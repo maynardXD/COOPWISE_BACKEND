@@ -17,11 +17,8 @@ class ApiSavings extends Controller
 
     public function index()
     {
-        $user = $this->authenticated_user();
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $this->record($user);
-        }
         $this->api->require_method('GET');
+        $user = $this->authenticated_user();
 
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         if (!$member) {
@@ -39,14 +36,8 @@ class ApiSavings extends Controller
         if ($member) {
             $balance = $this->member_balance((int) $member['id']);
         }
-        $members = $user['role'] === 'member' ? [] : $this->db->table('members')
-            ->select('id, member_number, first_name, last_name')
-            ->where('status', 'active')
-            ->order_by('last_name', 'ASC')
-            ->get_all();
         $this->api->respond([
             'transactions' => $transactions,
-            'members' => $members,
             'balance' => $balance,
             'auto_pay_preferences' => $member ? [
                 'loan' => (bool) ($member['loan_autopay_enabled'] ?? false),
@@ -185,56 +176,6 @@ class ApiSavings extends Controller
             'generated_at' => date('Y-m-d H:i:s'),
             'transactions' => $transactions
         ]);
-    }
-
-    private function record(array $user)
-    {
-        $this->api->require_method('POST');
-        $this->require_staff($user);
-        $data = $this->api->body();
-        $member_id = filter_var($data['member_id'] ?? null, FILTER_VALIDATE_INT);
-        $type = trim((string) ($data['type'] ?? ''));
-        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
-        $description = trim((string) ($data['description'] ?? ''));
-        if (!$member_id || !in_array($type, ['deposit', 'withdrawal'], true)
-            || $amount === false || $amount < 1 || strlen($description) > 255) {
-            $this->api->respond_error('Choose a member and transaction type, and enter a positive amount.', 422);
-        }
-
-        $this->db->transaction();
-        try {
-            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [$member_id])->fetch();
-            $member = $this->db->table('members')->where('id', $member_id)->where('status', 'active')->get();
-            if (!$member) {
-                throw new DomainException('The selected member is not active.');
-            }
-            $balance = $this->member_balance((int) $member_id);
-            if ($type === 'withdrawal' && $amount > $balance) {
-                throw new DomainException('The withdrawal amount cannot exceed the member’s available savings.');
-            }
-            $new_balance = $type === 'deposit' ? $balance + $amount : $balance - $amount;
-            $inserted = $this->db->table('savings_transactions')->insert([
-                'member_id' => (int) $member_id,
-                'type' => $type,
-                'amount' => self::format_cents($amount),
-                'balance_after' => self::format_cents($new_balance),
-                'reference_no' => 'CW-SAV-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
-                'description' => $description !== '' ? $description : null,
-                'created_by_user_id' => (int) $user['id']
-            ]);
-            if (!$inserted) {
-                throw new RuntimeException('The savings transaction could not be saved.');
-            }
-            $this->db->commit();
-        } catch (DomainException $error) {
-            $this->db->roll_back();
-            $this->api->respond_error($error->getMessage(), 422);
-        } catch (Throwable $error) {
-            $this->db->roll_back();
-            error_log('CoopWise API savings transaction failed: ' . $error->getMessage());
-            throw $error;
-        }
-        $this->api->respond(['message' => ucfirst($type) . ' recorded successfully.'], 201);
     }
 
     private function member_balance(int $member_id)

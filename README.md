@@ -32,8 +32,13 @@ reuse its branding, images, or website copy.
    Run `database/coopwise_share_capital_upgrade.sql` after those upgrades to
    add separate share subscriptions, paid-up contribution records, and
    auditable reversals, and enable the internal simulated loan-payment method.
-   The React frontend's Share Capital and Reports pages require these tables.
-   For a new database, the base schema already creates them.
+   Then run `database/coopwise_paymongo_email_upgrade.sql` to add the online
+   payment ledger, webhook idempotency records, password-reset OTP storage,
+   and PayMongo payment-method values. This migration depends on the loan,
+   cooperative-cycle, and share-capital tables from the earlier upgrades.
+   The React frontend's Share Capital, Reports, Payments, and password-reset
+   features require the corresponding tables. For a new database, the base
+   schema already creates the tables and payment-method values.
    Existing accounts must have an email or linked member phone number to sign
    in after the registration upgrade. Do not drop the existing tables.
 5. Copy `.env.example` to `.env` and set your local database values if they
@@ -78,20 +83,19 @@ constraint. Make a database backup before applying it.
   flat interest on the original principal: `principal × monthly rate × term`.
   No tax or additional fee is added. The rate is a local demo setting, not a
   published CARD Bank rate. Members can preview the estimated schedule before
-  applying and print/save their final approved schedule as PDF. Staff record
-  payments; members can view their own application and installment schedule.
+  applying and print/save their final approved schedule as PDF. Members can
+  pay through PayMongo checkout; loan balances update only after provider
+  confirmation.
 - Staff create a daily cooperative cycle, set the contribution amount, enroll
-  members, assign payout order, and activate it. Each enrolled member makes one
-  contribution per day; staff record contributions after receiving them.
-  Once all contributions for a day are recorded, the
-  system creates a payout for the next person in order; staff confirm the
-  payout after handing out the money. Further contributions wait until that
-  confirmation. The cycle completes after every enrolled member has received
-  one payout. This is tracked separately from personal savings, and the app
-  does not move real money or connect to a payment provider.
-- Savings transactions are recorded by staff, checked against the member's
-  available balance, and saved through LavaLust's query builder in a database
-  transaction. Members can view only their own savings history. The
+  multiple selected members with a randomized payout order, and activate it.
+  Each enrolled member contributes once per day through PayMongo checkout.
+  Once all confirmed contributions for a day are recorded, the system creates
+  a payout for the next person in order; staff still confirm when the pooled
+  payout is disbursed. Further contributions wait until that confirmation.
+  The cycle completes after every enrolled member has received one payout.
+- Savings deposits are added after PayMongo confirms payment, and withdrawals
+  remain simulated staff-managed requests. Members can view only their own
+  savings history. The
   authenticated `/api/savings/ledger` endpoint returns the signed-in member's
   selected period with opening/closing balances and transaction totals;
   `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
@@ -122,11 +126,23 @@ constraint. Make a database backup before applying it.
   Verification is rate-limited, and changing a member's status is reflected on
   the next scan. Keep the production `COOPWISE_JWT_SECRET` set to a strong,
   private value because it signs both access tokens and member-card QR tokens.
-- Members can submit demo payment records for review. Staff can approve or
-  reject a record; approval does not transfer money or change a financial
-  balance. Staff can record demo loan or share-capital transactions in the
-  appropriate ledger. No PayMongo, GCash, bank, or email service is integrated.
-- Uploaded loan documents and payment screenshots are stored in the protected
+- Members use a server-created PayMongo Hosted Checkout session to make
+  savings, loan, Paluwagan, or share-capital payments. The backend applies a
+  payment only after a signed PayMongo webhook or a server-side provider status
+  check confirms it. Members see only their own transactions; staff can view
+  the cooperative transaction history. The integration defaults to PayMongo
+  test mode and will not work until provider credentials and the webhook are
+  configured.
+- Password reset uses a six-digit, one-time code emailed through Brevo. Codes
+  are stored hashed, expire after ten minutes, and have a limited number of
+  attempts. Sending email requires a Brevo API key and a verified sender.
+- Staff may enroll multiple selected members in a Paluwagan cycle; the backend
+  randomizes their payout order. PayMongo collects contributions only; it
+  does not send the pooled Paluwagan payout, which staff must still confirm.
+- Existing demo payment-submission records are retained, but the new frontend
+  and API no longer use the staff submission-approval flow. This upgrade does
+  not erase financial history.
+- Uploaded loan documents are stored in the protected
   `runtime/private_uploads` directory and can only be viewed through
   authenticated, owner/staff-authorized API routes.
 - Loan-document requirements are cooperative- and product-specific; use the
@@ -137,15 +153,15 @@ constraint. Make a database backup before applying it.
 - Staff can view cooperative-wide reports. Member dashboards show only that
   member's activity.
 - Share capital is tracked separately from savings. Staff create subscriptions
-  using cooperative-approved share counts and par values, then record
-  contributions against the unpaid amount. The demo payment method records a
-  simulated transaction only; it does not transfer money. Corrections are
-  retained as linked reversal records instead of deleting the original
-  transaction. Staff and members can view subscribed, paid-up, and unpaid
-  amounts; members can only access their own records.
+  using cooperative-approved share counts and par values. Members can pay the
+  unpaid amount through PayMongo checkout. Corrections are retained as linked
+  reversal records instead of deleting the original transaction. Staff and
+  members can view subscribed, paid-up, and unpaid amounts; members can only
+  access their own records.
 
-This project is a school/demo application, not a live banking service. It does
-not connect to CARD Bank or external payment systems. Profile editing, settings,
+This project is a school/demo application, not a live banking service. PayMongo
+must remain in test mode for the school demo; a test payment does not move real
+money. The project does not connect to CARD Bank. Profile editing, settings,
 and expanded notification features are not implemented.
 
 ## Separate frontend and Render deployment
@@ -158,16 +174,16 @@ builder. It supports registration/sign-in, a searchable staff member directory,
 date-filtered printable savings ledgers and signed QR member ID cards, staff
 reports, member loan-document review before offer
 access, loan application schedule previews and printable approved schedules,
-demo payment submission and review, staff loan product/review/payment
-workflows, and daily Paluwagan cycle enrollment, contributions, payout
-readiness, and staff payout confirmation. Share capital subscriptions and
-contributions are separate from savings, with a member-only ledger view and
-staff-controlled, auditable transaction reversals. Loan payments and submitted
-payment records support demonstration only; no external payment service moves
-funds. Loan approvals credit the principal to savings. Members may request and
-track simulated withdrawals; staff complete or reject/refund requests without
-transferring money. Members can also explicitly opt in to loan or Paluwagan
-auto-pay from savings.
+PayMongo Hosted Checkout and member/staff transaction history, Brevo-backed
+password-reset OTP, staff loan product/review workflows, and daily Paluwagan
+cycle enrollment, contributions, payout readiness, and staff payout
+confirmation. Share capital subscriptions and contributions are separate from
+savings, with a member-only ledger view and staff-controlled, auditable
+transaction reversals. PayMongo-confirmed payments update the appropriate
+ledger. Loan approvals credit the principal into savings. Members may request
+and track simulated withdrawals; staff complete or reject/refund requests
+without transferring money. Members can also explicitly opt in to loan or
+Paluwagan auto-pay from savings.
 Other legacy pages remain in the LavaLust app and have not yet been migrated to
 the separate frontend.
 
@@ -178,12 +194,13 @@ the separate frontend.
    Blueprint explicitly selects Render's `free` plan so it does not default to
    a paid web-service plan.
 2. Provide an external MySQL-compatible database (Render does not supply a
-   managed MySQL database). Import `coopwise_schema.sql` and all additive
-   upgrade scripts, including `coopwise_loans_cooperative_upgrade.sql`,
-   `coopwise_documents_payments_upgrade.sql`, and
-   `coopwise_financial_workflows_upgrade.sql`, and
-   `coopwise_share_capital_upgrade.sql`, into it using a trusted database
-   client. For an existing hosted database where `/api/cooperative/cycles`
+   managed MySQL database). For a new database, import `coopwise_schema.sql`.
+   For an existing database, back it up and apply the additive upgrades in
+   order: registration, loans/cooperative, documents/payments, financial
+   workflows, share capital, then PayMongo/email. Skip any upgrade already
+   applied. Use a trusted database client and do not drop existing tables. The
+   PayMongo/email migration depends on the earlier loan, cycle, and
+   share-capital tables. For a database where `/api/cooperative/cycles`
    returns a schema-related error, back up the database and apply
    `coopwise_loans_cooperative_upgrade.sql` before retrying. For Aiven MySQL,
    upload its CA certificate in Render's **Secret Files** as
@@ -193,8 +210,25 @@ the separate frontend.
    dashboard. Set `APP_BASE_URL` to the Render service URL, database credentials
    to the hosted MySQL values, and all three secrets to distinct random values
    of at least 32 characters. Set `COOPWISE_ALLOWED_ORIGINS` to the exact
-   deployed Vercel origin; do not use `*`.
+   deployed Vercel origin; do not use `*`. Keep `PAYMONGO_MODE=test` while
+   testing, and set `PAYMONGO_SECRET_KEY` and `PAYMONGO_WEBHOOK_SECRET` using
+   test credentials from PayMongo. Set `BREVO_API_KEY` and the verified
+   `BREVO_SENDER_EMAIL` to enable password-reset email. Do not put secret keys
+   in Vercel or frontend environment variables.
 4. Configure `/api/health` as Render's health-check path.
+
+In PayMongo's dashboard, add a webhook at
+`https://YOUR-RENDER-SERVICE.onrender.com/api/checkout-transactions/webhook`
+and subscribe to `checkout_session.payment.paid`. Copy the endpoint's test-mode
+webhook secret into Render's `PAYMONGO_WEBHOOK_SECRET`, then redeploy. Test
+payments with PayMongo test credentials only. Before switching to live mode,
+the cooperative must also decide how to account for provider fees and complete
+PayMongo's required business verification.
+
+For password-reset email, create a Brevo API key, verify the sender address,
+and set those values in Render. Until configured, OTP emails cannot be
+delivered. Neither the database migration nor these provider settings have
+been applied to a hosted service by this project change.
 
 Savings auto-pay is disabled unless each member opts in. To run it in a hosted
 deployment, configure a separate daily Render Cron Job from this repository's
@@ -208,7 +242,7 @@ one; the existing free web service does not run this script automatically.
 The free web service is suitable for a school demo, not a production banking
 service. Render spins it down after 15 minutes without traffic; the first
 request after that can take about a minute while it starts. Its local filesystem
-is temporary, so loan documents and payment screenshots in
+is temporary, so loan documents in
 `runtime/private_uploads` can be lost during restarts or deployments. The app
 stores persistent records in Aiven MySQL rather than on the Render service, but
 MySQL does not persist these uploaded files. Before relying on uploads in a

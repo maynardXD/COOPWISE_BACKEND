@@ -118,7 +118,7 @@ class Cooperative extends Controller {
         if (!$inserted) {
             throw new RuntimeException('The cooperative cycle could not be created.');
         }
-        $_SESSION['cooperative_success'] = 'Cycle created as a draft. Add members and payout order, then activate it.';
+        $_SESSION['cooperative_success'] = 'Cycle created as a draft. Select members to assign a randomized payout order, then activate it.';
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }
@@ -128,31 +128,81 @@ class Cooperative extends Controller {
         $this->coopwise_access->require_staff();
         $db = $this->call->database();
         $cycle_id = filter_input(INPUT_POST, 'cycle_id', FILTER_VALIDATE_INT);
-        $member_id = filter_input(INPUT_POST, 'member_id', FILTER_VALIDATE_INT);
-        $order = filter_input(INPUT_POST, 'payout_order', FILTER_VALIDATE_INT);
-        if (!$cycle_id || !$member_id || !$order || $order > 999) {
-            $this->redirect_with_error('Choose an eligible cycle and member, and enter a positive payout order.');
+        $raw_member_ids = $_POST['member_ids'] ?? (isset($_POST['member_id']) ? [$_POST['member_id']] : []);
+        if (!$cycle_id || !is_array($raw_member_ids) || count($raw_member_ids) < 1 || count($raw_member_ids) > 999) {
+            $this->redirect_with_error('Choose a draft cycle and between one and 999 members.');
         }
 
-        $cycle = $db->table('cooperative_cycles')->where('id', $cycle_id)->get();
-        $member = $db->table('members')->where('id', $member_id)->where('status', 'active')->get();
-        $duplicate_member = $db->table('cooperative_cycle_members')
-            ->where('cycle_id', $cycle_id)->where('member_id', $member_id)->count();
-        $duplicate_order = $db->table('cooperative_cycle_members')
-            ->where('cycle_id', $cycle_id)->where('payout_order', $order)->count();
-        if (!$cycle || $cycle['status'] !== 'draft' || !$member || (int) $duplicate_member > 0 || (int) $duplicate_order > 0) {
-            $this->redirect_with_error('Only active members can be added to a draft cycle; member and order must be unique.');
+        $member_ids = [];
+        foreach ($raw_member_ids as $raw_member_id) {
+            $member_id = filter_var($raw_member_id, FILTER_VALIDATE_INT);
+            if (!$member_id || $member_id < 1) {
+                $this->redirect_with_error('Every selected member must be valid.');
+            }
+            $member_ids[] = (int) $member_id;
+        }
+        if (count(array_unique($member_ids)) !== count($member_ids)) {
+            $this->redirect_with_error('A member may be selected only once.');
         }
 
-        $inserted = $db->table('cooperative_cycle_members')->insert([
-            'cycle_id' => $cycle_id,
-            'member_id' => $member_id,
-            'payout_order' => $order
-        ]);
-        if (!$inserted) {
-            throw new RuntimeException('The cycle member could not be added.');
+        $db->transaction();
+        try {
+            $cycle = $db->raw('SELECT id, status FROM cooperative_cycles WHERE id = ? FOR UPDATE', [$cycle_id])
+                ->fetch(PDO::FETCH_ASSOC);
+            if (!$cycle || $cycle['status'] !== 'draft') {
+                throw new DomainException('Members can only be enrolled in a draft cycle.');
+            }
+            $existing_members = $db->table('cooperative_cycle_members')
+                ->where('cycle_id', $cycle_id)
+                ->order_by('payout_order', 'ASC')
+                ->get_all();
+            $current_count = count($existing_members);
+            if ($current_count + count($member_ids) > 999) {
+                throw new DomainException('A cycle cannot have more than 999 members.');
+            }
+            foreach ($existing_members as $index => $existing_member) {
+                $expected_order = $index + 1;
+                if ((int) $existing_member['payout_order'] !== $expected_order) {
+                    $db->table('cooperative_cycle_members')
+                        ->where('cycle_id', $cycle_id)
+                        ->where('member_id', (int) $existing_member['member_id'])
+                        ->update(['payout_order' => $expected_order]);
+                }
+            }
+            foreach ($member_ids as $member_id) {
+                $member = $db->table('members')->where('id', $member_id)->where('status', 'active')->get();
+                $already_enrolled = (int) $db->table('cooperative_cycle_members')
+                    ->where('cycle_id', $cycle_id)
+                    ->where('member_id', $member_id)
+                    ->count() > 0;
+                if (!$member || $already_enrolled) {
+                    throw new DomainException('Only active members who are not already enrolled can join this draft cycle.');
+                }
+            }
+            for ($index = count($member_ids) - 1; $index > 0; $index--) {
+                $random_index = random_int(0, $index);
+                [$member_ids[$index], $member_ids[$random_index]] = [$member_ids[$random_index], $member_ids[$index]];
+            }
+            foreach ($member_ids as $index => $member_id) {
+                $inserted = $db->table('cooperative_cycle_members')->insert([
+                    'cycle_id' => $cycle_id,
+                    'member_id' => $member_id,
+                    'payout_order' => $current_count + $index + 1
+                ]);
+                if (!$inserted) {
+                    throw new RuntimeException('A selected member could not be enrolled in the cycle.');
+                }
+            }
+            $db->commit();
+        } catch (DomainException $error) {
+            $db->roll_back();
+            $this->redirect_with_error($error->getMessage());
+        } catch (Throwable $error) {
+            $db->roll_back();
+            error_log('CoopWise batch cycle enrollment failed: ' . $error->getMessage());
+            throw $error;
         }
-        $_SESSION['cooperative_success'] = 'Member added to the draft cycle in the selected payout order.';
+        $_SESSION['cooperative_success'] = count($member_ids) . ' member(s) added with a randomized payout order.';
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }
@@ -178,7 +228,7 @@ class Cooperative extends Controller {
         }
 
         $db->table('cooperative_cycles')->where('id', $cycle_id)->update(['status' => 'active']);
-        $_SESSION['cooperative_success'] = 'Cycle activated. Daily contributions can now be recorded.';
+        $_SESSION['cooperative_success'] = 'Cycle activated. Members can now contribute through PayMongo checkout.';
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }
@@ -201,110 +251,20 @@ class Cooperative extends Controller {
         if ($deleted !== 1) {
             $this->redirect_with_error('That member is not assigned to this draft cycle.');
         }
-        $_SESSION['cooperative_success'] = 'Member removed. You can now reassign the payout order.';
-        header('Location: ' . BASE_URL . 'cooperative');
-        exit;
-    }
-
-    public function record_contribution() {
-        $this->call->library('coopwise_access');
-        $user = $this->coopwise_access->require_staff();
-        $db = $this->call->database();
-        $cycle_id = filter_input(INPUT_POST, 'cycle_id', FILTER_VALIDATE_INT);
-        $member_id = filter_input(INPUT_POST, 'member_id', FILTER_VALIDATE_INT);
-        if (!$cycle_id || !$member_id) {
-            $this->redirect_with_error('Choose an active cycle and an enrolled member.');
+        $remaining_members = $db->table('cooperative_cycle_members')
+            ->where('cycle_id', $cycle_id)
+            ->order_by('payout_order', 'ASC')
+            ->get_all();
+        foreach ($remaining_members as $index => $remaining_member) {
+            $expected_order = $index + 1;
+            if ((int) $remaining_member['payout_order'] !== $expected_order) {
+                $db->table('cooperative_cycle_members')
+                    ->where('cycle_id', $cycle_id)
+                    ->where('member_id', (int) $remaining_member['member_id'])
+                    ->update(['payout_order' => $expected_order]);
+            }
         }
-
-        $db->transaction();
-        try {
-            $cycle = $db->table('cooperative_cycles')->where('id', $cycle_id)->get();
-            $membership = $db->table('cooperative_cycle_members')
-                ->where('cycle_id', $cycle_id)
-                ->where('member_id', $member_id)
-                ->get();
-            if (!$cycle || $cycle['status'] !== 'active' || !$membership || $cycle['start_date'] > date('Y-m-d')) {
-                throw new DomainException('Contributions are only accepted for enrolled members in an active cycle on or after its start date.');
-            }
-            $ready_payout = $db->table('cooperative_payouts')
-                ->where('cycle_id', $cycle_id)
-                ->where('status', 'ready')
-                ->count();
-            if ((int) $ready_payout > 0) {
-                throw new DomainException('Staff must confirm the previous day’s payout before recording contributions for another day.');
-            }
-            $already_recorded = $db->table('cooperative_contributions')
-                ->where('cycle_id', $cycle_id)
-                ->where('member_id', $member_id)
-                ->where('contribution_date', date('Y-m-d'))
-                ->count();
-            if ((int) $already_recorded > 0) {
-                throw new DomainException('This member already has a contribution recorded for today.');
-            }
-
-            $inserted = $db->table('cooperative_contributions')->insert([
-                'cycle_id' => $cycle_id,
-                'member_id' => $member_id,
-                'contribution_date' => date('Y-m-d'),
-                'amount' => $cycle['daily_contribution'],
-                'reference_no' => 'CW-COOP-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
-                'recorded_by_user_id' => (int) $user['id']
-            ]);
-            if (!$inserted) {
-                throw new RuntimeException('The daily contribution could not be recorded.');
-            }
-
-            $member_count = (int) $db->table('cooperative_cycle_members')
-                ->where('cycle_id', $cycle_id)
-                ->count();
-            $today_count = (int) $db->table('cooperative_contributions')
-                ->where('cycle_id', $cycle_id)
-                ->where('contribution_date', date('Y-m-d'))
-                ->count();
-            if ($member_count > 0 && $today_count === $member_count) {
-                $recipient = $db->table('cooperative_cycle_members cm')
-                    ->select('cm.member_id, cm.payout_order, cp.id AS payout_id')
-                    ->left_join('cooperative_payouts cp', 'cp.cycle_id = cm.cycle_id AND cp.member_id = cm.member_id')
-                    ->where('cm.cycle_id', $cycle_id)
-                    ->order_by('cm.payout_order', 'ASC')
-                    ->get_all();
-                $next_recipient = null;
-                foreach ($recipient as $candidate) {
-                    if ($candidate['payout_id'] === null) {
-                        $next_recipient = $candidate;
-                        break;
-                    }
-                }
-                if (!$next_recipient) {
-                    throw new RuntimeException('All payout turns have already been assigned before this cycle completed.');
-                }
-                $payout_amount = self::money_to_cents((string) $cycle['daily_contribution']) * $member_count;
-                $payout_inserted = $db->table('cooperative_payouts')->insert([
-                    'cycle_id' => $cycle_id,
-                    'member_id' => (int) $next_recipient['member_id'],
-                    'payout_order' => (int) $next_recipient['payout_order'],
-                    'payout_date' => date('Y-m-d'),
-                    'amount' => self::format_cents($payout_amount),
-                    'reference_no' => 'CW-PAYOUT-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
-                    'status' => 'ready'
-                ]);
-                if (!$payout_inserted) {
-                    throw new RuntimeException('The pooled payout could not be created.');
-                }
-            }
-            $db->commit();
-        } catch (DomainException $error) {
-            $db->roll_back();
-            $this->redirect_with_error($error->getMessage());
-        } catch (Throwable $error) {
-            $db->roll_back();
-            error_log('CoopWise daily contribution failed: ' . $error->getMessage());
-            throw $error;
-        }
-
-        $_SESSION['cooperative_success'] = $today_count === $member_count
-            ? 'Contribution recorded. Today’s pooled payout is ready for staff confirmation.'
-            : 'Daily contribution recorded.';
+        $_SESSION['cooperative_success'] = 'Member removed. The remaining payout order has been resequenced.';
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }

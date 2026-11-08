@@ -4,11 +4,13 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 class ApiAuth extends Controller
 {
     private $api;
+    private $db;
 
     public function __construct()
     {
         parent::__construct();
         $this->api = $this->call->library('api');
+        $this->db = $this->call->database();
         $this->call->model('User_model');
     }
 
@@ -74,6 +76,195 @@ class ApiAuth extends Controller
         $this->api->respond([
             'message' => 'Registration successful. You can now sign in.',
         ], 201);
+    }
+
+    public function request_password_reset()
+    {
+        $this->api->require_method('POST');
+        $this->api->rate_limit('password-reset-request:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 3, 900);
+        $this->require_password_reset_schema();
+        $sender_email = strtolower(trim((string) getenv('BREVO_SENDER_EMAIL')));
+        $sender_name = trim((string) (getenv('BREVO_SENDER_NAME') ?: 'CoopWise'));
+        if (trim((string) getenv('BREVO_API_KEY')) === '' || !filter_var($sender_email, FILTER_VALIDATE_EMAIL)) {
+            $this->api->respond_error('Password-reset email is not configured. Add the Brevo API key and verified sender settings to the backend environment.', 503);
+        }
+
+        $data = $this->api->body();
+        $email = strtolower(trim((string) ($data['email'] ?? '')));
+        if (strlen($email) > 254 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $this->api->respond_error('Enter the email address linked to your CoopWise account.', 422);
+        }
+        $user = $this->db->table('users')
+            ->select('id, email, full_name')
+            ->where('email', $email)
+            ->where('status', 'active')
+            ->get();
+        if (!$user) {
+            $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
+        }
+
+        $recent_requests = (int) $this->db->raw(
+            'SELECT COUNT(*) AS total FROM password_reset_otps
+             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)',
+            [(int) $user['id']]
+        )->fetch(PDO::FETCH_ASSOC)['total'];
+        if ($recent_requests >= 3) {
+            $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
+        }
+
+        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM users WHERE id = ? FOR UPDATE', [(int) $user['id']])->fetch();
+            $this->db->raw(
+                'UPDATE password_reset_otps SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL',
+                [date('Y-m-d H:i:s'), (int) $user['id']]
+            );
+            $id = $this->db->table('password_reset_otps')->insert([
+                'user_id' => (int) $user['id'],
+                'email' => $email,
+                'otp_hash' => password_hash($otp, PASSWORD_DEFAULT),
+                'expires_at' => date('Y-m-d H:i:s', time() + 600)
+            ]);
+            if (!$id) {
+                throw new RuntimeException('The password-reset code could not be stored.');
+            }
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise password reset request could not be stored: ' . $error->getMessage());
+            $this->api->respond_error('A password-reset email could not be prepared. Please try again later.', 503);
+        }
+
+        try {
+            $this->send_reset_email($email, $user['full_name'], $otp, $sender_email, $sender_name);
+        } catch (Throwable $error) {
+            $this->db->raw(
+                'UPDATE password_reset_otps SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL',
+                [date('Y-m-d H:i:s'), (int) $id]
+            );
+            error_log('CoopWise password reset email delivery failed for user ' . (int) $user['id'] . ': ' . $error->getMessage());
+            $this->api->respond_error('A password-reset email could not be sent. Check the email sender configuration and try again later.', 502);
+        }
+        $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
+    }
+
+    public function confirm_password_reset()
+    {
+        $this->api->require_method('POST');
+        $this->api->rate_limit('password-reset-confirm:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 10, 600);
+        $this->require_password_reset_schema();
+        $data = $this->api->body();
+        $email = strtolower(trim((string) ($data['email'] ?? '')));
+        $otp = trim((string) ($data['otp'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
+        $confirmation = (string) ($data['password_confirmation'] ?? '');
+        if (strlen($email) > 254 || !filter_var($email, FILTER_VALIDATE_EMAIL)
+            || !preg_match('/^\d{6}$/D', $otp)
+            || !preg_match('/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,128}$/D', $password)
+            || $password !== $confirmation) {
+            $this->api->respond_error('Enter the email, six-digit code, and matching password that meets the password rules.', 422);
+        }
+
+        $user = $this->db->table('users')
+            ->select('id')
+            ->where('email', $email)
+            ->where('status', 'active')
+            ->get();
+        if (!$user) {
+            $this->api->respond_error('The code is invalid or expired. Request a new code and try again.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            $record = $this->db->raw(
+                'SELECT id, otp_hash, attempts, expires_at
+                 FROM password_reset_otps
+                 WHERE user_id = ? AND email = ? AND consumed_at IS NULL
+                 ORDER BY id DESC LIMIT 1 FOR UPDATE',
+                [(int) $user['id'], $email]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$record || $record['expires_at'] < date('Y-m-d H:i:s') || (int) $record['attempts'] >= 5) {
+                if ($record) {
+                    $this->db->table('password_reset_otps')
+                        ->where('id', (int) $record['id'])
+                        ->update(['consumed_at' => date('Y-m-d H:i:s')]);
+                }
+                $this->db->commit();
+                $this->api->respond_error('The code is invalid or expired. Request a new code and try again.', 422);
+            }
+            if (!password_verify($otp, $record['otp_hash'])) {
+                $attempts = (int) $record['attempts'] + 1;
+                $this->db->table('password_reset_otps')
+                    ->where('id', (int) $record['id'])
+                    ->update([
+                        'attempts' => $attempts,
+                        'consumed_at' => $attempts >= 5 ? date('Y-m-d H:i:s') : null
+                    ]);
+                $this->db->commit();
+                $this->api->respond_error('The code is invalid or expired. Request a new code and try again.', 422);
+            }
+            $updated = $this->db->table('users')
+                ->where('id', (int) $user['id'])
+                ->update(['password' => password_hash($password, PASSWORD_DEFAULT)]);
+            if ($updated !== 1) {
+                throw new RuntimeException('The account password could not be updated.');
+            }
+            $this->db->table('password_reset_otps')
+                ->where('id', (int) $record['id'])
+                ->update(['consumed_at' => date('Y-m-d H:i:s')]);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise password reset confirmation failed: ' . $error->getMessage());
+            throw $error;
+        }
+        $this->api->respond(['message' => 'Password changed. Sign in with your new password.']);
+    }
+
+    private function send_reset_email(string $email, string $full_name, string $otp, string $sender_email, string $sender_name)
+    {
+        $payload = json_encode([
+            'sender' => ['name' => $sender_name, 'email' => $sender_email],
+            'to' => [['email' => $email, 'name' => $full_name]],
+            'subject' => 'Your CoopWise password-reset code',
+            'textContent' => "Your CoopWise password-reset code is {$otp}. It expires in 10 minutes. If you did not request this, ignore this email."
+        ], JSON_UNESCAPED_SLASHES);
+        if ($payload === false) {
+            throw new RuntimeException('The password-reset email content could not be encoded.');
+        }
+        $context = stream_context_create(['http' => [
+            'method' => 'POST',
+            'header' => "api-key: " . getenv('BREVO_API_KEY') . "\r\nAccept: application/json\r\nContent-Type: application/json",
+            'content' => $payload,
+            'timeout' => 15,
+            'ignore_errors' => true
+        ], 'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true
+        ]]);
+        $response = @file_get_contents('https://api.brevo.com/v3/smtp/email', false, $context);
+        $status_line = $http_response_header[0] ?? '';
+        preg_match('/\s(\d{3})\s/', $status_line, $matches);
+        $status = (int) ($matches[1] ?? 0);
+        if (!is_string($response) || $status < 200 || $status >= 300) {
+            throw new RuntimeException('Brevo email API returned HTTP ' . ($status ?: 'unknown') . '.');
+        }
+    }
+
+    private function require_password_reset_schema()
+    {
+        $table = $this->db->raw(
+            "SELECT table_name FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'password_reset_otps'"
+        )->fetch(PDO::FETCH_ASSOC);
+        if (!$table) {
+            error_log('CoopWise password reset schema is missing; apply database/coopwise_paymongo_email_upgrade.sql.');
+            $this->api->respond_error(
+                'Password reset is not configured in the database yet. Apply database/coopwise_paymongo_email_upgrade.sql, then retry.',
+                503
+            );
+        }
     }
 
     public function me()
