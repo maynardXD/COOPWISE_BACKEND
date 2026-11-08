@@ -36,10 +36,11 @@
             <div>
                 <label for="method">Payment Method</label>
                 <select id="method" name="method" required>
-                    <option value="cash">Cash</option>
-                    <option value="bank">Bank</option>
-                    <option value="gcash">GCash</option>
-                    <option value="check">Check</option>
+                    <option value="simulation">Simulated demo payment</option>
+                    <option value="cash">Cash received</option>
+                    <option value="bank">Bank transfer received</option>
+                    <option value="gcash">GCash received</option>
+                    <option value="check">Check received</option>
                 </select>
             </div>
             <div style="align-self: end;">

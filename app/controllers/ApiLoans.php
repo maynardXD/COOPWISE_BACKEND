@@ -418,7 +418,7 @@ class ApiLoans extends Controller
         $data = $this->api->body();
         $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
         $method = trim((string) ($data['method'] ?? ''));
-        if ($loan_id < 1 || $amount === false || $amount < 1 || !in_array($method, ['cash', 'bank', 'gcash', 'check'], true)) {
+        if ($loan_id < 1 || $amount === false || $amount < 1 || !in_array($method, ['simulation', 'cash', 'bank', 'gcash', 'check'], true)) {
             $this->api->respond_error('Enter a positive amount and valid payment method.', 422);
         }
 

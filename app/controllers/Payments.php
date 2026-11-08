@@ -54,7 +54,7 @@ class Payments extends Controller {
         $amount_cents = self::money_to_cents($amount_input);
         $method = trim((string) ($_POST['method'] ?? ''));
 
-        if (!$loan_id || $amount_cents === false || $amount_cents < 1 || !in_array($method, ['cash', 'bank', 'gcash', 'check'], true)) {
+        if (!$loan_id || $amount_cents === false || $amount_cents < 1 || !in_array($method, ['simulation', 'cash', 'bank', 'gcash', 'check'], true)) {
             $_SESSION['payment_error'] = 'Enter a valid loan, positive amount, and payment method.';
             header('Location: ' . BASE_URL . 'payments');
             exit;

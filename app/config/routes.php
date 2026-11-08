@@ -86,6 +86,10 @@ $router->post('/api/savings/withdrawals/{request_id}/complete', 'ApiSavingsWithd
 $router->post('/api/savings/withdrawals/{request_id}/reject', 'ApiSavingsWithdrawals::reject')->where_number('request_id');
 $router->get('/api/savings/ledger', 'ApiSavings::ledger');
 $router->get('/api/savings/ledger/{member_id}', 'ApiSavings::ledger')->where_number('member_id');
+$router->get('/api/share-capital', 'ApiShareCapital::index');
+$router->post('/api/share-capital/subscriptions', 'ApiShareCapital::create_subscription');
+$router->post('/api/share-capital/payments', 'ApiShareCapital::record_payment');
+$router->post('/api/share-capital/payments/{transaction_id}/reverse', 'ApiShareCapital::reverse_payment')->where_number('transaction_id');
 $router->get('/api/member-card', 'ApiMemberCards::issue');
 $router->get('/api/members/{member_id}/card', 'ApiMemberCards::issue')->where_number('member_id');
 $router->get('/api/member-cards/verify', 'ApiMemberCards::verify');
@@ -113,6 +117,10 @@ $router->options('/api/savings/withdrawals/{request_id}/complete', 'ApiHealth::i
 $router->options('/api/savings/withdrawals/{request_id}/reject', 'ApiHealth::index')->where_number('request_id');
 $router->options('/api/savings/ledger', 'ApiHealth::index');
 $router->options('/api/savings/ledger/{member_id}', 'ApiHealth::index')->where_number('member_id');
+$router->options('/api/share-capital', 'ApiHealth::index');
+$router->options('/api/share-capital/subscriptions', 'ApiHealth::index');
+$router->options('/api/share-capital/payments', 'ApiHealth::index');
+$router->options('/api/share-capital/payments/{transaction_id}/reverse', 'ApiHealth::index')->where_number('transaction_id');
 $router->options('/api/member-card', 'ApiHealth::index');
 $router->options('/api/members/{member_id}/card', 'ApiHealth::index')->where_number('member_id');
 $router->options('/api/member-cards/verify', 'ApiHealth::index');

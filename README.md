@@ -29,6 +29,11 @@ reuse its branding, images, or website copy.
    existing databases to add protected loan documents and payment submissions.
    Run `database/coopwise_financial_workflows_upgrade.sql` to add withdrawal
    requests and member-controlled savings auto-payment preferences.
+   Run `database/coopwise_share_capital_upgrade.sql` after those upgrades to
+   add separate share subscriptions, paid-up contribution records, and
+   auditable reversals, and enable the internal simulated loan-payment method.
+   The React frontend's Share Capital and Reports pages require these tables.
+   For a new database, the base schema already creates them.
    Existing accounts must have an email or linked member phone number to sign
    in after the registration upgrade. Do not drop the existing tables.
 5. Copy `.env.example` to `.env` and set your local database values if they
@@ -93,12 +98,11 @@ constraint. Make a database backup before applying it.
   `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
 - Loan approval credits the approved principal to the member's savings ledger
   within the same database transaction that creates the amortization schedule.
-  Members can request a GCash withdrawal, confirm the account name and matching
-  mobile number, and reserve an amount from their savings. Staff manually send
-  the funds, attach a private receipt, and mark the request complete; rejecting
-  a request refunds the reserved amount. This workflow does not contact GCash
-  or initiate an electronic transfer. Members see only their own history and
-  receipts; staff can search, filter, sort, and page through all requests.
+  Members can request a simulated withdrawal that reserves an amount from their
+  savings ledger without collecting financial-account details. Staff complete
+  or reject the simulation; rejecting a request returns the reserved amount.
+  No money is transferred. Members see only their own history; staff can search,
+  filter, sort, and page through all requests.
 - Members may separately opt in to loan-installment and/or daily Paluwagan
   payments from savings. Both preferences are off by default. When enabled,
   `scripts/daily_savings_auto_pay.php` processes due amounts and records the
@@ -118,12 +122,10 @@ constraint. Make a database backup before applying it.
   Verification is rate-limited, and changing a member's status is reflected on
   the next scan. Keep the production `COOPWISE_JWT_SECRET` set to a strong,
   private value because it signs both access tokens and member-card QR tokens.
-- Members can submit GCash payment evidence for review using the provided QR
-  code, a screenshot, and/or a transaction reference number. Staff can mark
-  evidence verified or reject it. This is a manual review workflow only: it is
-  not a GCash integration and does not automatically post funds to a loan,
-  savings, or Paluwagan balance. Loan and contribution balances still use the
-  existing staff ledger workflows.
+- Members can submit demo payment records for review. Staff can approve or
+  reject a record; approval does not transfer money or change a financial
+  balance. Staff can record demo loan or share-capital transactions in the
+  appropriate ledger. No PayMongo, GCash, bank, or email service is integrated.
 - Uploaded loan documents and payment screenshots are stored in the protected
   `runtime/private_uploads` directory and can only be viewed through
   authenticated, owner/staff-authorized API routes.
@@ -134,6 +136,13 @@ constraint. Make a database backup before applying it.
   ([Lawphil text](https://lawphil.net/statutes/repacts/ra2009/ra_9520_2009.html)).
 - Staff can view cooperative-wide reports. Member dashboards show only that
   member's activity.
+- Share capital is tracked separately from savings. Staff create subscriptions
+  using cooperative-approved share counts and par values, then record
+  contributions against the unpaid amount. The demo payment method records a
+  simulated transaction only; it does not transfer money. Corrections are
+  retained as linked reversal records instead of deleting the original
+  transaction. Staff and members can view subscribed, paid-up, and unpaid
+  amounts; members can only access their own records.
 
 This project is a school/demo application, not a live banking service. It does
 not connect to CARD Bank or external payment systems. Profile editing, settings,
@@ -149,12 +158,16 @@ builder. It supports registration/sign-in, a searchable staff member directory,
 date-filtered printable savings ledgers and signed QR member ID cards, staff
 reports, member loan-document review before offer
 access, loan application schedule previews and printable approved schedules,
-payment evidence submission and review, staff loan product/review/payment
+demo payment submission and review, staff loan product/review/payment
 workflows, and daily Paluwagan cycle enrollment, contributions, payout
-readiness, and staff payout confirmation. Loan approvals credit the principal
-to savings. Members may request and track manual GCash withdrawals; staff attach
-transfer receipts and complete or reject/refund requests. Members can also
-explicitly opt in to loan or Paluwagan auto-pay from savings.
+readiness, and staff payout confirmation. Share capital subscriptions and
+contributions are separate from savings, with a member-only ledger view and
+staff-controlled, auditable transaction reversals. Loan payments and submitted
+payment records support demonstration only; no external payment service moves
+funds. Loan approvals credit the principal to savings. Members may request and
+track simulated withdrawals; staff complete or reject/refund requests without
+transferring money. Members can also explicitly opt in to loan or Paluwagan
+auto-pay from savings.
 Other legacy pages remain in the LavaLust app and have not yet been migrated to
 the separate frontend.
 
@@ -168,7 +181,8 @@ the separate frontend.
    managed MySQL database). Import `coopwise_schema.sql` and all additive
    upgrade scripts, including `coopwise_loans_cooperative_upgrade.sql`,
    `coopwise_documents_payments_upgrade.sql`, and
-   `coopwise_financial_workflows_upgrade.sql`, into it using a trusted database
+   `coopwise_financial_workflows_upgrade.sql`, and
+   `coopwise_share_capital_upgrade.sql`, into it using a trusted database
    client. For an existing hosted database where `/api/cooperative/cycles`
    returns a schema-related error, back up the database and apply
    `coopwise_loans_cooperative_upgrade.sql` before retrying. For Aiven MySQL,

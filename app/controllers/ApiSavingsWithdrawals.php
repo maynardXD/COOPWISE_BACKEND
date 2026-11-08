@@ -41,8 +41,8 @@ class ApiSavingsWithdrawals extends Controller
 
         $from_sql = " FROM savings_withdrawal_requests w
                 INNER JOIN members m ON m.id = w.member_id";
-        $sql = "SELECT w.id, w.member_id, w.request_reference, w.amount, w.gcash_account_name,
-                       w.gcash_number, w.status, w.receipt_storage_name, w.receipt_mime_type,
+        $sql = "SELECT w.id, w.member_id, w.request_reference, w.amount,
+                       w.status, w.receipt_storage_name, w.receipt_mime_type,
                        w.receipt_file_size, w.admin_note, w.requested_at, w.completed_at,
                        m.member_number, m.first_name, m.last_name
                 {$from_sql}";
@@ -58,8 +58,8 @@ class ApiSavingsWithdrawals extends Controller
         if ($term !== '') {
             $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term);
             $pattern = '%' . $escaped . '%';
-            $conditions[] = '(w.request_reference LIKE ? OR m.member_number LIKE ? OR CONCAT(m.first_name, " ", m.last_name) LIKE ? OR w.gcash_account_name LIKE ?)';
-            array_push($params, $pattern, $pattern, $pattern, $pattern);
+            $conditions[] = '(w.request_reference LIKE ? OR m.member_number LIKE ? OR CONCAT(m.first_name, " ", m.last_name) LIKE ?)';
+            array_push($params, $pattern, $pattern, $pattern);
         }
         if ($conditions) {
             $sql .= ' WHERE ' . implode(' AND ', $conditions);
@@ -84,9 +84,6 @@ class ApiSavingsWithdrawals extends Controller
         foreach ($requests as &$request) {
             $request['has_receipt'] = $request['receipt_storage_name'] !== null;
             unset($request['receipt_storage_name']);
-            if ($member) {
-                unset($request['gcash_account_name'], $request['gcash_number']);
-            }
         }
         unset($request);
         $this->api->respond([
@@ -164,7 +161,7 @@ class ApiSavingsWithdrawals extends Controller
             error_log('CoopWise withdrawal receipt upload failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'GCash transfer receipt saved.']);
+        $this->api->respond(['message' => 'Demo withdrawal evidence saved. Do not upload real transfer receipts.']);
     }
 
     public function complete($request_id = null)
@@ -187,8 +184,8 @@ class ApiSavingsWithdrawals extends Controller
                 'SELECT status, receipt_storage_name FROM savings_withdrawal_requests WHERE id = ? FOR UPDATE',
                 [$id]
             )->fetch(PDO::FETCH_ASSOC);
-            if (!$request || $request['status'] !== 'pending' || !$request['receipt_storage_name']) {
-                throw new DomainException('Attach a transfer receipt first; only pending requests can be completed.');
+            if (!$request || $request['status'] !== 'pending') {
+                throw new DomainException('Only pending simulated withdrawals can be completed.');
             }
             $updated = $this->db->table('savings_withdrawal_requests')
                 ->where('id', $id)
@@ -211,7 +208,7 @@ class ApiSavingsWithdrawals extends Controller
             error_log('CoopWise withdrawal completion failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'Withdrawal marked completed. The saved receipt is available in its history.']);
+        $this->api->respond(['message' => 'Simulated withdrawal marked completed. No money was transferred.']);
     }
 
     public function reject($request_id = null)
@@ -245,7 +242,7 @@ class ApiSavingsWithdrawals extends Controller
                 'amount' => self::format_cents($refund),
                 'balance_after' => self::format_cents($balance + $refund),
                 'reference_no' => $reference,
-                'description' => 'Refund for rejected GCash withdrawal ' . $request['request_reference'],
+                'description' => 'Refund for rejected simulated withdrawal ' . $request['request_reference'],
                 'created_by_user_id' => (int) $user['id']
             ]);
             if (!$inserted) {
@@ -272,7 +269,7 @@ class ApiSavingsWithdrawals extends Controller
             error_log('CoopWise withdrawal rejection failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'Withdrawal request rejected and its reserved savings were returned to the member.']);
+        $this->api->respond(['message' => 'Simulated withdrawal rejected and its reserved savings were returned to the member.']);
     }
 
     private function request(array $user)
@@ -282,12 +279,8 @@ class ApiSavingsWithdrawals extends Controller
         $member = $this->member_profile($user);
         $data = $this->api->body();
         $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
-        $gcash_name = trim((string) ($data['gcash_account_name'] ?? ''));
-        $gcash_number = trim((string) ($data['gcash_number'] ?? ''));
-        $confirm_number = trim((string) ($data['confirm_gcash_number'] ?? ''));
-        if ($amount === false || $amount < 1 || $gcash_name === '' || strlen($gcash_name) > 120
-            || !preg_match('/^09\d{9}$/D', $gcash_number) || $gcash_number !== $confirm_number) {
-            $this->api->respond_error('Enter a valid amount, GCash account name, matching 11-digit GCash numbers, and confirm the details.', 422);
+        if ($amount === false || $amount < 1) {
+            $this->api->respond_error('Enter a valid positive amount for the simulated withdrawal.', 422);
         }
 
         $this->db->transaction();
@@ -303,8 +296,8 @@ class ApiSavingsWithdrawals extends Controller
                 'request_reference' => $reference,
                 'savings_reference_no' => $reference,
                 'amount' => self::format_cents($amount),
-                'gcash_account_name' => $gcash_name,
-                'gcash_number' => $gcash_number,
+                'gcash_account_name' => 'SIMULATION',
+                'gcash_number' => 'SIMULATION',
                 'status' => 'pending'
             ]);
             if (!$request_id) {
@@ -316,7 +309,7 @@ class ApiSavingsWithdrawals extends Controller
                 'amount' => self::format_cents($amount),
                 'balance_after' => self::format_cents($balance - $amount),
                 'reference_no' => $reference,
-                'description' => 'GCash withdrawal requested; awaiting staff transfer.',
+                'description' => 'Simulated withdrawal requested; awaiting staff review.',
                 'created_by_user_id' => (int) $user['id']
             ]);
             if (!$inserted) {
@@ -332,7 +325,7 @@ class ApiSavingsWithdrawals extends Controller
             throw $error;
         }
         $this->api->respond([
-            'message' => 'Withdrawal request submitted. The amount is reserved from your savings while staff reviews and sends it.',
+            'message' => 'Simulated withdrawal request submitted. The amount is reserved from your savings while staff reviews it; no money will be transferred.',
             'id' => (int) $request_id,
             'request_reference' => $reference
         ], 201);
@@ -341,14 +334,14 @@ class ApiSavingsWithdrawals extends Controller
     private function validated_receipt()
     {
         if (!isset($_FILES['receipt']) || $_FILES['receipt']['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($_FILES['receipt']['tmp_name'])) {
-            $this->api->respond_error('Attach a GCash transfer receipt image before continuing.', 422);
+            $this->api->respond_error('Attach a demo evidence image, not a real transfer receipt.', 422);
         }
         $file = $_FILES['receipt'];
         $image_info = @getimagesize($file['tmp_name']);
         $mime = $image_info['mime'] ?? '';
         if (!$image_info || (int) $file['size'] < 1 || (int) $file['size'] > 5 * 1024 * 1024
             || !in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
-            $this->api->respond_error('Transfer receipt must be a JPEG, PNG, or WebP image no larger than 5 MB.', 422);
+            $this->api->respond_error('Demo evidence must be a JPEG, PNG, or WebP image no larger than 5 MB.', 422);
         }
         return ['tmp_name' => $file['tmp_name'], 'size' => (int) $file['size'], 'mime' => $mime];
     }
@@ -363,7 +356,7 @@ class ApiSavingsWithdrawals extends Controller
         $name = bin2hex(random_bytes(32)) . '.' . $extension;
         $path = $directory . DIRECTORY_SEPARATOR . $name;
         if (!move_uploaded_file($file['tmp_name'], $path)) {
-            throw new RuntimeException('GCash transfer receipt could not be stored.');
+            throw new RuntimeException('Demo withdrawal evidence could not be stored.');
         }
         return ['name' => $name, 'path' => $path, 'mime' => $file['mime']];
     }
@@ -371,7 +364,7 @@ class ApiSavingsWithdrawals extends Controller
     private function send_private_image(array $request)
     {
         if (!preg_match('/^[a-f0-9]{64}\.(?:jpg|png|webp)$/D', $request['receipt_storage_name'])) {
-            throw new RuntimeException('The stored transfer receipt filename is invalid.');
+            throw new RuntimeException('The stored demo evidence filename is invalid.');
         }
         $path = ROOT_DIR . 'runtime' . DIRECTORY_SEPARATOR . 'private_uploads' . DIRECTORY_SEPARATOR . $request['receipt_storage_name'];
         if (!is_file($path) || !is_readable($path)) {
@@ -379,7 +372,7 @@ class ApiSavingsWithdrawals extends Controller
         }
         header('Content-Type: ' . $request['receipt_mime_type']);
         header('Content-Length: ' . filesize($path));
-        header('Content-Disposition: inline; filename="gcash-transfer-receipt"');
+        header('Content-Disposition: inline; filename="demo-withdrawal-evidence"');
         header('X-Content-Type-Options: nosniff');
         readfile($path);
         exit;
@@ -411,7 +404,7 @@ class ApiSavingsWithdrawals extends Controller
         if ((int) $table !== 1) {
             error_log('CoopWise withdrawal schema is incomplete; savings_withdrawal_requests table is missing.');
             $this->api->respond_error(
-                'GCash savings withdrawals are not configured in the database yet. Apply database/coopwise_financial_workflows_upgrade.sql, then retry.',
+                'Simulated savings withdrawals are not configured in the database yet. Apply database/coopwise_financial_workflows_upgrade.sql, then retry.',
                 503
             );
         }

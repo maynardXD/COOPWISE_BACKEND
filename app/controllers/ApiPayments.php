@@ -126,8 +126,8 @@ class ApiPayments extends Controller
         }
         $this->api->respond([
             'message' => $decision === 'approve'
-                ? 'Payment evidence marked as verified. Record the received funds in the appropriate ledger.'
-                : 'Payment evidence rejected.'
+                ? 'Demo payment record approved. This does not transfer money or update a financial balance.'
+                : 'Demo payment record rejected.'
         ]);
     }
 
