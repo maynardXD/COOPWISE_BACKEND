@@ -126,18 +126,30 @@ class ApiShareCapital extends Controller
             $this->api->respond_error('The selected member is not active.', 422);
         }
 
-        $id = $this->db->table('share_capital_subscriptions')->insert([
-            'member_id' => (int) $member_id,
-            'subscription_number' => 'CW-SHR-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
-            'subscribed_shares' => (int) $shares,
-            'par_value' => self::format_cents($par_value),
-            'subscribed_amount' => self::format_cents($total_cents),
-            'subscription_date' => $date,
-            'status' => 'active',
-            'created_by_user_id' => (int) $user['id']
-        ]);
-        if (!$id) {
-            throw new RuntimeException('Share capital subscription could not be saved.');
+        $this->db->transaction();
+        try {
+            $id = $this->db->table('share_capital_subscriptions')->insert([
+                'member_id' => (int) $member_id,
+                'subscription_number' => 'CW-SHR-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
+                'subscribed_shares' => (int) $shares,
+                'par_value' => self::format_cents($par_value),
+                'subscribed_amount' => self::format_cents($total_cents),
+                'subscription_date' => $date,
+                'status' => 'active',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$id) {
+                throw new RuntimeException('Share capital subscription could not be saved.');
+            }
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'subscription_created', [
+                'subscription_id' => (int) $id,
+                'member_id' => (int) $member_id,
+                'subscribed_shares' => (int) $shares
+            ]);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
         }
 
         $this->api->respond(['message' => 'Share capital subscription created.', 'id' => (int) $id], 201);
@@ -206,6 +218,11 @@ class ApiShareCapital extends Controller
             $this->db->table('share_capital_subscriptions')
                 ->where('id', (int) $subscription['id'])
                 ->update(['status' => 'active']);
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'payment_reversed', [
+                'transaction_id' => (int) $id,
+                'reversal_id' => (int) $inserted,
+                'amount' => self::format_cents($amount)
+            ]);
             $this->db->commit();
         } catch (DomainException $error) {
             $this->db->roll_back();
@@ -228,6 +245,19 @@ class ApiShareCapital extends Controller
             [$subscription_id]
         )->fetch(PDO::FETCH_ASSOC);
         return self::money_to_cents((string) ($row['paid'] ?? '0.00'));
+    }
+
+    private function write_activity_log(int $user_id, string $module, string $action, array $details)
+    {
+        $id = $this->db->table('activity_logs')->insert([
+            'user_id' => $user_id,
+            'module' => $module,
+            'action' => $action,
+            'details' => json_encode($details, JSON_UNESCAPED_SLASHES)
+        ]);
+        if (!$id) {
+            throw new RuntimeException('The share capital audit record could not be saved.');
+        }
     }
 
     private function require_schema()

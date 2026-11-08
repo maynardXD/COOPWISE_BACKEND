@@ -36,6 +36,9 @@ reuse its branding, images, or website copy.
    payment ledger, webhook idempotency records, password-reset OTP storage,
    and Xendit payment-method values. This migration depends on the loan,
    cooperative-cycle, and share-capital tables from the earlier upgrades.
+   Then run `database/coopwise_governance_upgrade.sql` to add cooperative
+   meetings, member polls, and one-vote-per-active-member records. New
+   databases receive these tables from `database/coopwise_schema.sql`.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
@@ -93,6 +96,14 @@ constraint. Make a database backup before applying it.
   a payout for the next person in order; staff still confirm when the pooled
   payout is disbursed. Further contributions wait until that confirmation.
   The cycle completes after every enrolled member has received one payout.
+- Staff can post a meeting and open a poll with two to six choices. Active
+  members can vote once; the system stores the choice privately and shows
+  members only aggregate results after the poll closes. Staff can review
+  recent loan decisions, payment confirmations, Paluwagan payout confirmations,
+  share-capital corrections, and governance actions in the activity history.
+  The poll is a classroom governance tool and does not replace cooperative
+  bylaws, formal notice, quorum, or legally required meeting and election
+  procedures.
 - Savings deposits are added after Xendit confirms payment, and withdrawals
   remain simulated staff-managed requests. Members can view only their own
   savings history. The

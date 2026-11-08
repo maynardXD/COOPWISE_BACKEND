@@ -453,6 +453,10 @@ class ApiCheckout extends Controller
                         'paid_at' => date('Y-m-d H:i:s'),
                         'review_note' => $error->getMessage()
                     ]);
+                $this->write_activity_log(null, 'payments', 'payment_needs_review', [
+                    'transaction_id' => $transaction_id,
+                    'purpose' => $payment['purpose']
+                ]);
                 $this->db->commit();
                 return;
             }
@@ -471,6 +475,11 @@ class ApiCheckout extends Controller
             if ($updated !== 1) {
                 throw new RuntimeException('The confirmed payment status could not be saved.');
             }
+            $this->write_activity_log(null, 'payments', 'payment_confirmed', [
+                'transaction_id' => $transaction_id,
+                'purpose' => $payment['purpose'],
+                'amount' => (string) $payment['amount']
+            ]);
             $this->db->commit();
         } catch (Throwable $error) {
             $this->db->roll_back();
@@ -501,6 +510,7 @@ class ApiCheckout extends Controller
         if (!$inserted) {
             throw new RuntimeException('The confirmed savings deposit could not be recorded.');
         }
+
     }
 
     private function apply_loan_payment(array $payment)
@@ -787,6 +797,19 @@ class ApiCheckout extends Controller
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
             $this->api->respond_error('This action is available to cooperative staff only.', 403);
+        }
+    }
+
+    private function write_activity_log(?int $user_id, string $module, string $action, array $details)
+    {
+        $id = $this->db->table('activity_logs')->insert([
+            'user_id' => $user_id,
+            'module' => $module,
+            'action' => $action,
+            'details' => json_encode($details, JSON_UNESCAPED_SLASHES)
+        ]);
+        if (!$id) {
+            throw new RuntimeException('The payment audit record could not be saved.');
         }
     }
 

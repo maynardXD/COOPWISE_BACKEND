@@ -257,6 +257,10 @@ class ApiLoans extends Controller
                     'approved_by_user_id' => (int) $user['id'],
                     'review_note' => $review_note !== '' ? $review_note : null
                 ]);
+                $this->write_activity_log((int) $user['id'], 'loans', 'application_rejected', [
+                    'loan_id' => $loan_id,
+                    'loan_code' => $loan['loan_code']
+                ]);
                 $this->db->commit();
                 $this->api->respond(['message' => 'Application rejected.']);
             }
@@ -336,6 +340,12 @@ class ApiLoans extends Controller
                     throw new RuntimeException('A monthly installment could not be generated.');
                 }
             }
+            $this->write_activity_log((int) $user['id'], 'loans', 'application_approved', [
+                'loan_id' => $loan_id,
+                'loan_code' => $loan['loan_code'],
+                'approved_amount' => self::format_cents($principal),
+                'term_months' => $term
+            ]);
             $this->db->commit();
         } catch (DomainException $error) {
             $this->db->roll_back();
@@ -438,6 +448,19 @@ class ApiLoans extends Controller
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
             $this->api->respond_error('This action is available to cooperative staff only.', 403);
+        }
+    }
+
+    private function write_activity_log(int $user_id, string $module, string $action, array $details)
+    {
+        $id = $this->db->table('activity_logs')->insert([
+            'user_id' => $user_id,
+            'module' => $module,
+            'action' => $action,
+            'details' => json_encode($details, JSON_UNESCAPED_SLASHES)
+        ]);
+        if (!$id) {
+            throw new RuntimeException('The loan audit record could not be saved.');
         }
     }
 

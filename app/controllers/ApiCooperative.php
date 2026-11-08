@@ -368,7 +368,27 @@ class ApiCooperative extends Controller
                 $this->api->respond_error('Payout order must be consecutive, starting from 1.', 422);
             }
         }
-        $this->db->table('cooperative_cycles')->where('id', $cycle_id)->update(['status' => 'active']);
+        $this->db->transaction();
+        try {
+            $updated = $this->db->table('cooperative_cycles')
+                ->where('id', $cycle_id)
+                ->where('status', 'draft')
+                ->update(['status' => 'active']);
+            if ($updated !== 1) {
+                throw new DomainException('This cycle is no longer a draft and could not be activated.');
+            }
+            $this->write_activity_log((int) $user['id'], 'cooperative', 'cycle_activated', [
+                'cycle_id' => (int) $cycle_id
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise cycle activation failed: ' . $error->getMessage());
+            throw $error;
+        }
         $this->api->respond(['message' => 'Cycle activated.']);
     }
 
@@ -405,6 +425,10 @@ class ApiCooperative extends Controller
             if ($member_count > 0 && $paid_count === $member_count) {
                 $this->db->table('cooperative_cycles')->where('id', (int) $payout['cycle_id'])->update(['status' => 'completed']);
             }
+            $this->write_activity_log((int) $user['id'], 'cooperative', 'payout_confirmed', [
+                'payout_id' => (int) $payout_id,
+                'cycle_id' => (int) $payout['cycle_id']
+            ]);
             $this->db->commit();
         } catch (DomainException $error) {
             $this->db->roll_back();
@@ -446,6 +470,19 @@ class ApiCooperative extends Controller
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
             $this->api->respond_error('This action is available to cooperative staff only.', 403);
+        }
+    }
+
+    private function write_activity_log(int $user_id, string $module, string $action, array $details)
+    {
+        $id = $this->db->table('activity_logs')->insert([
+            'user_id' => $user_id,
+            'module' => $module,
+            'action' => $action,
+            'details' => json_encode($details, JSON_UNESCAPED_SLASHES)
+        ]);
+        if (!$id) {
+            throw new RuntimeException('The cooperative audit record could not be saved.');
         }
     }
 
