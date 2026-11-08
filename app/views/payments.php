@@ -5,7 +5,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
         <h3 style="margin: 0;">Loan Payment History</h3>
     </div>
-    <p class="muted">Payments are recorded after PayMongo confirms checkout. Use the Payments page in the CoopWise frontend to start a payment.</p>
+    <p class="muted">Payments are recorded after Xendit confirms checkout. Use the Payments page in the CoopWise frontend to start a payment.</p>
 
     <table>
         <thead>

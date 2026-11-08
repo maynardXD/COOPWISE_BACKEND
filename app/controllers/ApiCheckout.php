@@ -50,7 +50,7 @@ class ApiCheckout extends Controller
         }
         $member = $this->member_profile($user);
         $this->require_payment_schema();
-        $this->require_paymongo_config();
+        $this->require_xendit_config();
         $data = $this->api->body();
         $purpose = trim((string) ($data['purpose'] ?? ''));
         $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
@@ -114,39 +114,22 @@ class ApiCheckout extends Controller
             if (!filter_var($frontend_url, FILTER_VALIDATE_URL) || !in_array($frontend_scheme, $allowed_schemes, true)) {
                 throw new RuntimeException('COOPWISE_FRONTEND_URL is not configured with a valid URL.');
             }
-            $description = [
-                'savings' => 'CoopWise savings deposit',
-                'loan' => 'CoopWise loan repayment',
-                'paluwagan' => 'CoopWise Paluwagan contribution',
-                'share_capital' => 'CoopWise share-capital contribution'
-            ][$purpose];
             $payload = [
-                'data' => ['attributes' => [
-                    'line_items' => [[
-                        'currency' => 'PHP',
-                        'amount' => $amount,
-                        'name' => $description,
-                        'quantity' => 1
-                    ]],
-                    'payment_method_types' => self::payment_method_types(),
-                    'description' => $description,
-                    'reference_number' => $reference,
-                    'pass_on_fees' => false,
-                    'success_url' => $frontend_url . '/?payment=success&transaction=' . (int) $transaction_id,
-                    'cancel_url' => $frontend_url . '/?payment=cancelled&transaction=' . (int) $transaction_id,
-                    'metadata' => [
-                        'coopwise_transaction_id' => (string) $transaction_id,
-                        'coopwise_reference' => $reference
-                    ]
-                ]]
+                'reference_id' => $reference,
+                'session_type' => 'PAY',
+                'mode' => 'PAYMENT_LINK',
+                'amount' => $amount / 100,
+                'currency' => 'PHP',
+                'country' => 'PH',
+                'success_return_url' => $frontend_url . '/?payment=success&transaction=' . (int) $transaction_id,
+                'cancel_return_url' => $frontend_url . '/?payment=cancelled&transaction=' . (int) $transaction_id
             ];
-            $response = $this->paymongo_request('POST', '/v2/checkout_sessions', $payload);
-            $session = $response['data'] ?? [];
-            $session_id = (string) ($session['id'] ?? '');
-            $checkout_url = (string) ($session['attributes']['checkout_url'] ?? '');
+            $response = $this->xendit_request('POST', '/sessions', $payload);
+            $session_id = (string) ($response['payment_session_id'] ?? '');
+            $checkout_url = (string) ($response['payment_link_url'] ?? '');
             if ($session_id === '' || !filter_var($checkout_url, FILTER_VALIDATE_URL)
                 || !in_array(parse_url($checkout_url, PHP_URL_SCHEME), ['https'], true)) {
-                throw new RuntimeException('PayMongo did not return a valid checkout session.');
+                throw new RuntimeException('Xendit did not return a valid hosted checkout session.');
             }
             $updated = $this->db->table('payment_transactions')
                 ->where('id', (int) $transaction_id)
@@ -163,12 +146,12 @@ class ApiCheckout extends Controller
                     'status' => 'needs_review',
                     'review_note' => 'Checkout setup did not return a confirmed result. Contact staff before retrying.'
                 ]);
-            error_log('CoopWise PayMongo checkout creation failed: ' . $error->getMessage());
-            $this->api->respond_error('PayMongo checkout could not be started. Please try again later.', 502);
+            error_log('CoopWise Xendit checkout creation failed: ' . $error->getMessage());
+            $this->api->respond_error('Xendit checkout could not be started. Please try again later.', 502);
         }
 
         $this->api->respond([
-            'message' => 'Checkout is ready. Your account will update after PayMongo confirms the payment.',
+            'message' => 'Checkout is ready. Your account will update after Xendit confirms the payment.',
             'transaction_id' => (int) $transaction_id,
             'checkout_url' => $checkout_url
         ], 201);
@@ -198,37 +181,32 @@ class ApiCheckout extends Controller
         if (!in_array($transaction['status'], ['pending', 'needs_review'], true) || !$transaction['provider_checkout_id']) {
             $this->api->respond(['message' => 'Payment status is ' . $transaction['status'] . '.', 'status' => $transaction['status']]);
         }
-        $this->require_paymongo_config();
+        $this->require_xendit_config();
         try {
-            $response = $this->paymongo_request('GET', '/v2/checkout_sessions/' . rawurlencode($transaction['provider_checkout_id']));
-            $session = $response['data'] ?? [];
-            $attributes = $session['attributes'] ?? [];
-            if (($attributes['status'] ?? '') === 'paid') {
-                $provider_payment = $attributes['payments'][0] ?? [];
-                $payment_attributes = $provider_payment['attributes'] ?? [];
-                if (($payment_attributes['status'] ?? '') !== 'paid') {
-                    throw new RuntimeException('PayMongo did not return a paid payment record.');
-                }
-                [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($attributes, $payment_attributes);
+            $session = $this->xendit_request(
+                'GET',
+                '/sessions/' . rawurlencode($transaction['provider_checkout_id'])
+            );
+            $status = strtoupper((string) ($session['status'] ?? ''));
+            if ($status === 'COMPLETED') {
+                [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($session);
                 $this->apply_paid_checkout(
                     (int) $transaction['id'],
                     (string) $transaction['provider_checkout_id'],
                     $paid_amount,
                     $paid_currency,
-                    !empty($provider_payment['id']) ? (string) $provider_payment['id'] : null,
-                    (string) ($attributes['reference_number'] ?? ''),
-                    isset($payment_attributes['fee']) ? (int) $payment_attributes['fee'] : null,
-                    isset($payment_attributes['net_amount']) ? (int) $payment_attributes['net_amount'] : null
+                    !empty($session['payment_request_id']) ? (string) $session['payment_request_id'] : null,
+                    (string) ($session['reference_id'] ?? '')
                 );
-            } elseif (in_array(($attributes['status'] ?? ''), ['expired', 'unpaid'], true)) {
+            } elseif (in_array($status, ['EXPIRED', 'CANCELED'], true)) {
                 $this->db->table('payment_transactions')
                     ->where('id', (int) $transaction['id'])
                     ->where('status', 'pending')
                     ->update(['status' => 'failed']);
             }
         } catch (Throwable $error) {
-            error_log('CoopWise PayMongo status check failed for transaction ' . (int) $transaction_id . ': ' . $error->getMessage());
-            $this->api->respond_error('PayMongo could not confirm the status right now. Please try again shortly.', 502);
+            error_log('CoopWise Xendit status check failed for transaction ' . (int) $transaction_id . ': ' . $error->getMessage());
+            $this->api->respond_error('Xendit could not confirm the status right now. Please try again shortly.', 502);
         }
         $updated = $this->db->table('payment_transactions')
             ->where('id', (int) $transaction_id)
@@ -243,66 +221,78 @@ class ApiCheckout extends Controller
     {
         $this->api->require_method('POST');
         $raw_body = file_get_contents('php://input');
-        $signature = (string) ($_SERVER['HTTP_PAYMONGO_SIGNATURE'] ?? '');
+        $callback_token = trim((string) ($_SERVER['HTTP_X_CALLBACK_TOKEN'] ?? ''));
         if (!is_string($raw_body) || $raw_body === '' || strlen($raw_body) > 1048576
-            || !$this->verify_webhook_signature($raw_body, $signature)) {
-            $this->api->respond_error('Invalid PayMongo webhook signature.', 401);
+            || !$this->verify_webhook_token($callback_token)) {
+            $this->api->respond_error('Invalid Xendit webhook token.', 401);
         }
         $this->require_payment_schema();
+        $this->require_xendit_config();
         $event = json_decode($raw_body, true);
         if (!is_array($event)) {
-            $this->api->respond_error('Invalid PayMongo webhook event.', 400);
+            $this->api->respond_error('Invalid Xendit webhook event.', 400);
         }
-        $event_type = (string) ($event['data']['type'] ?? $event['data']['attributes']['type'] ?? '');
-        $event_id = (string) ($event['id'] ?? $event['data']['id'] ?? '');
+        $event_type = (string) ($event['event'] ?? '');
+        $event_data = is_array($event['data'] ?? null) ? $event['data'] : [];
+        $event_id = (string) ($event['id'] ?? $event_data['event_id'] ?? '');
         if ($event_id === '') {
             $event_id = 'sha256-' . hash('sha256', $raw_body);
         }
         if (strlen($event_id) > 120 || $event_type === '' || strlen($event_type) > 100) {
-            $this->api->respond_error('Invalid PayMongo webhook event.', 400);
+            $this->api->respond_error('Invalid Xendit webhook event.', 400);
         }
         if ($this->db->table('payment_webhook_events')->where('provider_event_id', $event_id)->count() > 0) {
             $this->api->respond(['message' => 'Webhook event was already processed.']);
         }
 
         try {
-            if ($event_type === 'checkout_session.payment.paid') {
-                $session_id = $this->checkout_session_id_from_event($event);
-                if ($session_id === '') {
-                    throw new RuntimeException('Paid webhook did not include a checkout session identifier.');
+            if ($event_type === 'payment_session.completed') {
+                $provider_reference = (string) ($event_data['reference_id'] ?? '');
+                $session_id = (string) (
+                    $event_data['payment_session_id']
+                    ?? $event_data['id']
+                    ?? ''
+                );
+                $transaction_query = $this->db->table('payment_transactions');
+                if ($provider_reference !== '') {
+                    $transaction_query->where('reference_no', $provider_reference);
+                } elseif ($session_id !== '') {
+                    $transaction_query->where('provider_checkout_id', $session_id);
+                } else {
+                    throw new RuntimeException('Completed webhook did not include a payment reference or session identifier.');
                 }
-                $response = $this->paymongo_request('GET', '/v2/checkout_sessions/' . rawurlencode($session_id));
-                $session = $response['data'] ?? [];
-                $attributes = $session['attributes'] ?? [];
-                if (($attributes['status'] ?? '') !== 'paid') {
-                    throw new RuntimeException('PayMongo checkout session is not confirmed as paid.');
+                $transaction = $transaction_query->get();
+                if (!$transaction || empty($transaction['provider_checkout_id'])
+                    || ($session_id !== '' && !hash_equals((string) $transaction['provider_checkout_id'], $session_id))) {
+                    throw new RuntimeException('Completed Xendit session does not match a CoopWise transaction.');
                 }
-                $provider_reference = (string) ($attributes['reference_number'] ?? '');
-                if ($provider_reference === '') {
-                    throw new RuntimeException('Paid checkout session is missing its transaction reference.');
+                $session = $this->xendit_request(
+                    'GET',
+                    '/sessions/' . rawurlencode($transaction['provider_checkout_id'])
+                );
+                if (strtoupper((string) ($session['status'] ?? '')) !== 'COMPLETED') {
+                    throw new RuntimeException('Xendit has not confirmed the payment session as completed.');
                 }
-                $transaction = $this->db->table('payment_transactions')
-                    ->where('reference_no', $provider_reference)
-                    ->get();
-                if (!$transaction) {
-                    throw new RuntimeException('Paid checkout session does not match a CoopWise transaction.');
-                }
-                $provider_payment = $attributes['payments'][0] ?? [];
-                $payment_attributes = $provider_payment['attributes'] ?? [];
-                if (($payment_attributes['status'] ?? '') !== 'paid') {
-                    throw new RuntimeException('PayMongo did not return a paid payment record.');
-                }
-                [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($attributes, $payment_attributes);
+                [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($session);
                 $this->apply_paid_checkout(
                     (int) $transaction['id'],
-                    $session_id,
+                    (string) $transaction['provider_checkout_id'],
                     $paid_amount,
                     $paid_currency,
-                    !empty($provider_payment['id']) ? (string) $provider_payment['id'] : null,
-                    $provider_reference,
-                    isset($payment_attributes['fee']) ? (int) $payment_attributes['fee'] : null,
-                    isset($payment_attributes['net_amount']) ? (int) $payment_attributes['net_amount'] : null
+                    !empty($session['payment_request_id']) ? (string) $session['payment_request_id'] : null,
+                    (string) ($session['reference_id'] ?? '')
                 );
+            } elseif ($event_type === 'payment_session.expired') {
+                $session_id = (string) ($event_data['payment_session_id'] ?? $event_data['id'] ?? '');
+                $expired_query = $this->db->table('payment_transactions');
+                if ($session_id !== '') {
+                    $expired_query->where('provider_checkout_id', $session_id);
+                } elseif (!empty($event_data['reference_id'])) {
+                    $expired_query->where('reference_no', (string) $event_data['reference_id']);
+                }
+                if ($session_id !== '' || !empty($event_data['reference_id'])) {
+                    $expired_query->where('status', 'pending')->update(['status' => 'failed']);
+                }
             }
             $this->db->table('payment_webhook_events')->insert([
                 'provider_event_id' => $event_id,
@@ -310,8 +300,8 @@ class ApiCheckout extends Controller
                 'payload_sha256' => hash('sha256', $raw_body)
             ]);
         } catch (Throwable $error) {
-            error_log('CoopWise PayMongo webhook processing failed for event ' . $event_id . ': ' . $error->getMessage());
-            $this->api->respond_error('Webhook processing failed; PayMongo should retry this event.', 503);
+            error_log('CoopWise Xendit webhook processing failed for event ' . $event_id . ': ' . $error->getMessage());
+            $this->api->respond_error('Webhook processing failed; Xendit should retry this event.', 503);
         }
         $this->api->respond(['message' => 'Webhook processed.']);
     }
@@ -502,7 +492,7 @@ class ApiCheckout extends Controller
             'amount' => $payment['amount'],
             'balance_after' => self::format_cents($balance + self::money_to_cents((string) $payment['amount'])),
             'reference_no' => $payment['reference_no'],
-            'description' => 'PayMongo-confirmed savings deposit.',
+            'description' => 'Xendit-confirmed savings deposit.',
             'created_by_user_id' => null
         ]);
         if (!$inserted) {
@@ -526,7 +516,7 @@ class ApiCheckout extends Controller
             'member_id' => (int) $payment['member_id'],
             'paid_by_user_id' => null,
             'amount_paid' => $payment['amount'],
-            'payment_method' => 'paymongo',
+            'payment_method' => 'xendit',
             'reference_no' => $payment['reference_no'],
             'payment_date' => date('Y-m-d H:i:s')
         ]);
@@ -665,7 +655,7 @@ class ApiCheckout extends Controller
             'amount' => $payment['amount'],
             'balance_after' => self::format_cents($balance_after),
             'transaction_reference' => $payment['reference_no'],
-            'payment_method' => 'paymongo',
+            'payment_method' => 'xendit',
             'created_by_user_id' => null
         ]);
         if (!$inserted) {
@@ -678,88 +668,37 @@ class ApiCheckout extends Controller
         }
     }
 
-    private function checkout_session_id_from_event(array $event)
+    private static function checkout_amount_and_currency(array $session)
     {
-        $attributes = $event['data']['attributes'] ?? [];
-        $resource = $event['data']['data'] ?? $attributes['data'] ?? [];
-        $resource_attributes = $resource['attributes'] ?? [];
-        if (($resource['type'] ?? '') === 'checkout_session') {
-            return (string) ($resource['id'] ?? '');
-        }
-        if (str_starts_with((string) ($resource['id'] ?? ''), 'cs_')) {
-            return (string) $resource['id'];
-        }
-        return (string) (
-            $resource_attributes['checkout_session_id']
-            ?? $resource_attributes['checkout_session']['id']
-            ?? $attributes['checkout_session_id']
-            ?? ''
-        );
-    }
-
-    private static function checkout_amount_and_currency(array $session_attributes, array $payment_attributes)
-    {
-        $amount = $session_attributes['amount'] ?? null;
+        $amount = $session['amount'] ?? null;
         if (!is_numeric($amount)) {
-            $amount = 0;
-            foreach (($session_attributes['line_items'] ?? []) as $line_item) {
-                $line_attributes = $line_item['attributes'] ?? $line_item;
-                $line_amount = (int) ($line_attributes['amount'] ?? 0);
-                $quantity = max(1, (int) ($line_attributes['quantity'] ?? 1));
-                $amount += $line_amount * $quantity;
-            }
+            throw new RuntimeException('Xendit payment session did not include a valid amount.');
         }
-        if ($amount < 1) {
-            $amount = (int) ($payment_attributes['amount'] ?? 0);
+        $amount_string = number_format((float) $amount, 2, '.', '');
+        $amount_cents = self::money_to_cents($amount_string);
+        $currency = strtoupper((string) ($session['currency'] ?? ''));
+        if ($amount_cents === false || $currency === '') {
+            throw new RuntimeException('Xendit payment session did not include valid payment details.');
         }
-        $first_line_item = $session_attributes['line_items'][0] ?? [];
-        $first_line_attributes = $first_line_item['attributes'] ?? [];
-        $currency = strtoupper((string) (
-            $session_attributes['currency']
-            ?? $first_line_item['currency']
-            ?? $first_line_attributes['currency']
-            ?? $payment_attributes['currency']
-            ?? ''
-        ));
-        return [(int) $amount, $currency];
+        return [$amount_cents, $currency];
     }
 
-    private function verify_webhook_signature(string $raw_body, string $header)
+    private function verify_webhook_token(string $provided_token)
     {
-        $secret = (string) getenv('PAYMONGO_WEBHOOK_SECRET');
-        if ($secret === '' || $header === '') {
-            return false;
-        }
-        $parts = [];
-        foreach (explode(',', $header) as $component) {
-            $pair = explode('=', trim($component), 2);
-            if (count($pair) === 2) {
-                $parts[$pair[0]] = $pair[1];
-            }
-        }
-        $timestamp = $parts['t'] ?? '';
-        $mode = self::paymongo_mode();
-        if (!in_array($mode, ['test', 'live'], true)) {
-            return false;
-        }
-        $provided = $parts[$mode === 'live' ? 'li' : 'te'] ?? '';
-        if (!ctype_digit($timestamp) || abs(time() - (int) $timestamp) > 600 || $provided === '') {
-            return false;
-        }
-        $expected = hash_hmac('sha256', $timestamp . '.' . $raw_body, $secret);
-        return hash_equals($expected, $provided);
+        $expected_token = (string) getenv('XENDIT_WEBHOOK_TOKEN');
+        return $expected_token !== '' && $provided_token !== '' && hash_equals($expected_token, $provided_token);
     }
 
-    private function require_paymongo_config()
+    private function require_xendit_config()
     {
-        $key = (string) getenv('PAYMONGO_SECRET_KEY');
-        $mode = self::paymongo_mode();
+        $key = (string) getenv('XENDIT_SECRET_KEY');
+        $mode = self::xendit_mode();
         if (!in_array($mode, ['test', 'live'], true)) {
-            $this->api->respond_error('PAYMONGO_MODE must be either test or live.', 503);
+            $this->api->respond_error('XENDIT_MODE must be either test or live.', 503);
         }
-        $expected_prefix = $mode === 'live' ? 'sk_live_' : 'sk_test_';
-        if (!str_starts_with($key, $expected_prefix) || getenv('PAYMONGO_WEBHOOK_SECRET') === '') {
-            $this->api->respond_error('PayMongo is not configured for ' . $mode . ' mode. Add matching secret and webhook keys to the backend environment.', 503);
+        $expected_prefix = $mode === 'live' ? 'xnd_production_' : 'xnd_development_';
+        if (!str_starts_with($key, $expected_prefix) || getenv('XENDIT_WEBHOOK_TOKEN') === '') {
+            $this->api->respond_error('Xendit is not configured for ' . $mode . ' mode. Add the matching secret key and webhook token to the backend environment.', 503);
         }
     }
 
@@ -771,33 +710,27 @@ class ApiCheckout extends Controller
                AND table_name IN ('payment_transactions', 'payment_webhook_events')"
         )->fetchAll(PDO::FETCH_COLUMN);
         if (count($tables) !== 2) {
-            error_log('CoopWise payment schema is missing; apply database/coopwise_paymongo_email_upgrade.sql.');
+            error_log('CoopWise payment schema is missing; apply database/coopwise_xendit_email_upgrade.sql.');
             $this->api->respond_error(
-                'Online payments are not configured in the database yet. Apply database/coopwise_paymongo_email_upgrade.sql, then retry.',
+                'Online payments are not configured in the database yet. Apply database/coopwise_xendit_email_upgrade.sql, then retry.',
                 503
             );
         }
     }
 
-    private static function paymongo_mode()
+    private static function xendit_mode()
     {
-        return strtolower(trim((string) (getenv('PAYMONGO_MODE') ?: 'test')));
+        return strtolower(trim((string) (getenv('XENDIT_MODE') ?: 'test')));
     }
 
-    private static function payment_method_types()
+    private function xendit_request(string $method, string $path, ?array $payload = null)
     {
-        $configured = array_filter(array_map('trim', explode(',', (string) (getenv('PAYMONGO_PAYMENT_METHOD_TYPES') ?: 'gcash,card'))));
-        $allowed = ['gcash', 'card', 'paymaya', 'grab_pay', 'dob', 'dob_ubp', 'billease'];
-        $methods = array_values(array_intersect(array_unique($configured), $allowed));
-        return $methods ?: ['gcash', 'card'];
-    }
-
-    private function paymongo_request(string $method, string $path, ?array $payload = null)
-    {
-        $key = (string) getenv('PAYMONGO_SECRET_KEY');
-        $body = $payload !== null ? json_encode($payload, JSON_UNESCAPED_SLASHES) : null;
+        $key = (string) getenv('XENDIT_SECRET_KEY');
+        $body = $payload !== null
+            ? json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION)
+            : null;
         if ($payload !== null && $body === false) {
-            throw new RuntimeException('PayMongo request could not be encoded.');
+            throw new RuntimeException('Xendit request could not be encoded.');
         }
         $headers = [
             'Authorization: Basic ' . base64_encode($key . ':'),
@@ -805,7 +738,7 @@ class ApiCheckout extends Controller
             'Content-Type: application/json'
         ];
         if ($method === 'POST') {
-            $headers[] = 'Idempotency-Key: ' . hash('sha256', (string) ($payload['data']['attributes']['reference_number'] ?? $path));
+            $headers[] = 'Idempotency-Key: ' . hash('sha256', (string) ($payload['reference_id'] ?? $path));
         }
         $context = stream_context_create(['http' => [
             'method' => $method,
@@ -817,13 +750,13 @@ class ApiCheckout extends Controller
             'verify_peer' => true,
             'verify_peer_name' => true
         ]]);
-        $response_body = file_get_contents('https://api.paymongo.com' . $path, false, $context);
+        $response_body = file_get_contents('https://api.xendit.co' . $path, false, $context);
         $status_line = $http_response_header[0] ?? '';
         preg_match('/\s(\d{3})\s/', $status_line, $matches);
         $status = (int) ($matches[1] ?? 0);
         $decoded = is_string($response_body) ? json_decode($response_body, true) : null;
         if ($status < 200 || $status >= 300 || !is_array($decoded)) {
-            throw new RuntimeException('PayMongo API request failed with HTTP ' . ($status ?: 'unknown') . '.');
+            throw new RuntimeException('Xendit API request failed with HTTP ' . ($status ?: 'unknown') . '.');
         }
         return $decoded;
     }

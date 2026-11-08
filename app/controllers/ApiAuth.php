@@ -259,9 +259,9 @@ class ApiAuth extends Controller
              WHERE table_schema = DATABASE() AND table_name = 'password_reset_otps'"
         )->fetch(PDO::FETCH_ASSOC);
         if (!$table) {
-            error_log('CoopWise password reset schema is missing; apply database/coopwise_paymongo_email_upgrade.sql.');
+            error_log('CoopWise password reset schema is missing; apply database/coopwise_xendit_email_upgrade.sql.');
             $this->api->respond_error(
-                'Password reset is not configured in the database yet. Apply database/coopwise_paymongo_email_upgrade.sql, then retry.',
+                'Password reset is not configured in the database yet. Apply database/coopwise_xendit_email_upgrade.sql, then retry.',
                 503
             );
         }

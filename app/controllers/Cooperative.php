@@ -228,7 +228,7 @@ class Cooperative extends Controller {
         }
 
         $db->table('cooperative_cycles')->where('id', $cycle_id)->update(['status' => 'active']);
-        $_SESSION['cooperative_success'] = 'Cycle activated. Members can now contribute through PayMongo checkout.';
+        $_SESSION['cooperative_success'] = 'Cycle activated. Members can now contribute through Xendit checkout.';
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }

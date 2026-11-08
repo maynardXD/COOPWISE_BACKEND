@@ -4,7 +4,7 @@
 <div class="panel">
     <?php if (!empty($error)): ?><div class="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
     <?php if (!empty($success)): ?><div class="success-message"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-    <p class="muted">Members pay the same daily contribution through PayMongo checkout. After PayMongo confirms everyone's contribution, the pooled amount becomes ready for the next member in payout order; staff still confirm when the payout is disbursed.</p>
+    <p class="muted">Members pay the same daily contribution through Xendit checkout. After Xendit confirms everyone's contribution, the pooled amount becomes ready for the next member in payout order; staff still confirm when the payout is disbursed.</p>
 
     <?php if (!empty($can_manage)): ?>
         <details style="margin-bottom: 20px;">
@@ -90,7 +90,7 @@
 
             <?php if ($cycle['status'] === 'active' && (empty($cycle['has_ready_payout'])) && date('Y-m-d') >= $cycle['start_date']): ?>
                 <?php if ($own_enrollment): ?>
-                    <p class="muted">Use the Payments page in the CoopWise frontend to make today's contribution through PayMongo.</p>
+                    <p class="muted">Use the Payments page in the CoopWise frontend to make today's contribution through Xendit.</p>
                 <?php endif; ?>
             <?php endif; ?>
         </section>
