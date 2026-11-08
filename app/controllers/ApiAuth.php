@@ -81,7 +81,7 @@ class ApiAuth extends Controller
     public function request_password_reset()
     {
         $this->api->require_method('POST');
-        $this->api->rate_limit('password-reset-request:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 3, 900);
+        $this->api->rate_limit('password-reset-request:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 3, 60);
         $this->require_password_reset_schema();
         $sender_email = strtolower(trim((string) getenv('BREVO_SENDER_EMAIL')));
         $sender_name = trim((string) (getenv('BREVO_SENDER_NAME') ?: 'CoopWise'));
@@ -105,7 +105,7 @@ class ApiAuth extends Controller
 
         $recent_requests = (int) $this->db->raw(
             'SELECT COUNT(*) AS total FROM password_reset_otps
-             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)',
+             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)',
             [(int) $user['id']]
         )->fetch(PDO::FETCH_ASSOC)['total'];
         if ($recent_requests >= 3) {
