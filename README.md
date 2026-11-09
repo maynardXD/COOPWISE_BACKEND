@@ -42,6 +42,8 @@ reuse its branding, images, or website copy.
    `database/coopwise_retire_savings_withdrawals_upgrade.sql` to refund any
    old pending withdrawal simulations. These one-time migrations preserve the
    underlying transaction and request history.
+   Run `database/coopwise_policies_upgrade.sql` to add editable sample
+   cooperative policies for the Learning Center.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
@@ -104,21 +106,35 @@ constraint. Make a database backup before applying it.
   contributions; no real outbound payout is made. Further contributions wait
   until confirmation. The cycle completes after every enrolled member has
   received one payout.
+- The Cooperative Learning Center explains member ownership, share capital,
+  loans, Paluwagan, and demo balance behavior. Staff can edit sample policies
+  for this project; they are not universal cooperative rules. The guided demo
+  uses labeled fictional examples and does not create or reset database data.
 - Members' available demo balance is funded by approved loan proceeds and
   confirmed Paluwagan payouts. Xendit savings deposits are no longer offered.
   Members can simulate a withdrawal that immediately debits their own balance;
   no staff review or real transfer occurs. Repeated network submissions with
-  the same request identifier do not double-debit the account. Members can view
-  only their own transaction history. The
+  the same request identifier do not double-debit the account. Members choose
+  a destination label (GCash, Maya, BDO, BPI, or UnionBank); the label is saved
+  in the ledger description, but no account details are collected and no money
+  is sent. Members can view only their own transaction history. The
   authenticated `/api/savings/ledger` endpoint returns the signed-in member's
   selected period with opening/closing balances and transaction totals;
   `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
   `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
 - Loan approval credits the approved principal to the member's available balance
   within the same database transaction that creates the amortization schedule.
-  The new withdrawal endpoint writes a withdrawal ledger entry in a locked
-  transaction and records an audit event. No bank/e-wallet details are
-  collected and no money is transferred.
+  The withdrawal endpoint writes a withdrawal ledger entry in a locked
+  transaction and records an audit event. The member Savings view breaks down
+  loan credits, Paluwagan credits, other historical credits, and withdrawals.
+- The staff Reports page includes operational counts for pending reviews,
+  active Paluwagan cycles, payouts awaiting confirmation, and overdue
+  installments. The Savings page also includes member balance summaries,
+  member search, date/type/reference filters, individual ledger links, and
+  filtered CSV export. Staff do not get an unlogged balance-edit control.
+  Reports require the loan-document table from
+  `database/coopwise_documents_payments_upgrade.sql`; the endpoint reports a
+  clear migration error if that table is absent.
 - Members may separately opt in to loan-installment and/or daily Paluwagan
   payments from savings. Both preferences are off by default. When enabled,
   `scripts/daily_savings_auto_pay.php` processes due amounts and records the

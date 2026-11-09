@@ -22,6 +22,7 @@ class ApiReports extends Controller
             $this->api->respond_error('Reports are available to cooperative staff only.', 403);
         }
         $this->require_share_capital_schema();
+        $this->require_table('loan_readiness_submissions', 'database/coopwise_documents_payments_upgrade.sql');
 
         $period_start = new DateTimeImmutable('first day of this month');
         $period_end = $period_start->modify('first day of next month');
@@ -69,6 +70,20 @@ class ApiReports extends Controller
              ORDER BY al.created_at DESC, al.id DESC
              LIMIT 50'
         )->fetchAll(PDO::FETCH_ASSOC);
+        $overdue_installments = $this->db->raw(
+            "SELECT COUNT(*) AS count,
+                    COALESCE(SUM(GREATEST(total_due - paid_amount, 0)), 0) AS outstanding
+             FROM loan_schedules
+             WHERE due_date < CURRENT_DATE AND status IN ('pending', 'overdue')"
+        )->fetch(PDO::FETCH_ASSOC);
+        $operations = [
+            'loans_awaiting_review' => (int) $this->db->table('loans')->where('status', 'pending')->count(),
+            'documents_awaiting_review' => (int) $this->db->table('loan_readiness_submissions')->where('status', 'pending')->count(),
+            'active_paluwagan_cycles' => (int) $this->db->table('cooperative_cycles')->where('status', 'active')->count(),
+            'payouts_awaiting_confirmation' => (int) $this->db->table('cooperative_payouts')->where('status', 'ready')->count(),
+            'overdue_installment_count' => (int) ($overdue_installments['count'] ?? 0),
+            'overdue_installment_balance' => self::format_cents(self::money_to_cents((string) ($overdue_installments['outstanding'] ?? '0.00')))
+        ];
 
         $savings_by_type = ['deposit' => '0.00', 'withdrawal' => '0.00'];
         foreach ($monthly_savings as $row) {
@@ -98,7 +113,8 @@ class ApiReports extends Controller
                 'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', '')
             ],
             'loan_statuses' => $loan_statuses,
-            'activity_logs' => $activity_logs
+            'activity_logs' => $activity_logs,
+            'operations' => $operations
         ]);
     }
 
@@ -122,6 +138,22 @@ class ApiReports extends Controller
             error_log('CoopWise share capital schema is missing; apply database/coopwise_share_capital_upgrade.sql.');
             $this->api->respond_error(
                 'Share capital reports are not configured in the database yet. Apply database/coopwise_share_capital_upgrade.sql in Navicat, then retry.',
+                503
+            );
+        }
+    }
+
+    private function require_table($table, $migration)
+    {
+        $exists = $this->db->raw(
+            'SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = ?',
+            [$table]
+        )->fetchColumn();
+        if ((int) $exists !== 1) {
+            error_log('CoopWise report schema is missing table ' . $table . '; apply ' . $migration . '.');
+            $this->api->respond_error(
+                'Operational reports are not configured in the database yet. Apply ' . $migration . ' in Navicat, then retry.',
                 503
             );
         }

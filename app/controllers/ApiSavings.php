@@ -33,12 +33,66 @@ class ApiSavings extends Controller
         }
         $transactions = $query->order_by('s.created_at', 'DESC')->get_all();
         $balance = null;
+        $balance_breakdown = null;
+        $member_balances = [];
+        $summary = null;
         if ($member) {
             $balance = $this->member_balance((int) $member['id']);
+            $breakdown = ['loan_credits' => 0, 'paluwagan_credits' => 0, 'other_credits' => 0, 'withdrawals' => 0];
+            foreach ($transactions as $transaction) {
+                $amount = self::money_to_cents((string) $transaction['amount']);
+                if ($amount === false) {
+                    throw new RuntimeException('A member transaction amount could not be calculated.');
+                }
+                $description = strtolower((string) ($transaction['description'] ?? ''));
+                $reference = strtoupper((string) ($transaction['reference_no'] ?? ''));
+                if ($transaction['type'] === 'withdrawal') {
+                    $breakdown['withdrawals'] += $amount;
+                } elseif (strpos($description, 'paluwagan payout') !== false || strpos($reference, 'CW-PALUWAGAN-') === 0) {
+                    $breakdown['paluwagan_credits'] += $amount;
+                } elseif (strpos($description, 'loan') !== false || strpos($reference, 'CW-DISBURSE-') === 0) {
+                    $breakdown['loan_credits'] += $amount;
+                } else {
+                    $breakdown['other_credits'] += $amount;
+                }
+            }
+            $balance_breakdown = array_map([self::class, 'format_cents'], $breakdown);
+        } else {
+            $member_balances = $this->db->raw(
+                "SELECT m.id, m.member_number, m.first_name, m.last_name, m.status,
+                        COALESCE(SUM(CASE WHEN s.type = 'deposit' THEN s.amount ELSE 0 END), 0) AS credits,
+                        COALESCE(SUM(CASE WHEN s.type = 'withdrawal' THEN s.amount ELSE 0 END), 0) AS debits,
+                        COALESCE(SUM(CASE WHEN s.type = 'deposit' THEN s.amount ELSE -s.amount END), 0) AS balance
+                 FROM members m
+                 LEFT JOIN savings_transactions s ON s.member_id = m.id
+                 GROUP BY m.id, m.member_number, m.first_name, m.last_name, m.status
+                 ORDER BY m.last_name ASC, m.first_name ASC"
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $totals = ['credits' => 0, 'debits' => 0, 'balance' => 0];
+            foreach ($member_balances as &$row) {
+                foreach (array_keys($totals) as $key) {
+                    $cents = self::money_to_cents((string) $row[$key]);
+                    if ($cents === false) {
+                        throw new RuntimeException('A member savings total could not be calculated.');
+                    }
+                    $totals[$key] += $cents;
+                    $row[$key] = self::format_cents($cents);
+                }
+            }
+            unset($row);
+            $summary = [
+                'member_count' => count($member_balances),
+                'credits' => self::format_cents($totals['credits']),
+                'debits' => self::format_cents($totals['debits']),
+                'balance' => self::format_cents($totals['balance'])
+            ];
         }
         $this->api->respond([
             'transactions' => $transactions,
             'balance' => $balance,
+            'balance_breakdown' => $balance_breakdown,
+            'member_balances' => $member_balances,
+            'summary' => $summary,
             'auto_pay_preferences' => $member ? [
                 'loan' => (bool) ($member['loan_autopay_enabled'] ?? false),
                 'paluwagan' => (bool) ($member['paluwagan_autopay_enabled'] ?? false)
@@ -58,16 +112,24 @@ class ApiSavings extends Controller
         $data = $this->api->body();
         $amount_value = $data['amount'] ?? null;
         $request_id_value = $data['request_id'] ?? null;
-        if (!is_string($amount_value) || !is_string($request_id_value)) {
-            $this->api->respond_error('Enter a valid withdrawal amount and request identifier.', 422);
+        $channel_value = $data['channel'] ?? null;
+        if (!is_string($amount_value) || !is_string($request_id_value) || !is_string($channel_value)) {
+            $this->api->respond_error('Enter a valid withdrawal amount, destination, and request identifier.', 422);
         }
         $amount = self::money_to_cents(trim($amount_value));
         $request_id = strtolower(trim($request_id_value));
-        if ($amount === false || $amount < 1 || !preg_match(
+        $destinations = [
+            'gcash' => 'GCash',
+            'maya' => 'Maya',
+            'bank_bdo' => 'BDO Bank',
+            'bank_bpi' => 'BPI',
+            'bank_unionbank' => 'UnionBank'
+        ];
+        if ($amount === false || $amount < 1 || !isset($destinations[$channel_value]) || !preg_match(
             '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
             $request_id
         )) {
-            $this->api->respond_error('Enter a valid withdrawal amount and request identifier.', 422);
+            $this->api->respond_error('Enter a valid withdrawal amount and supported demo destination.', 422);
         }
 
         $reference = 'CW-WD-' . strtoupper(str_replace('-', '', $request_id));
@@ -77,7 +139,7 @@ class ApiSavings extends Controller
         try {
             $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [$member_id])->fetch();
             $existing = $this->db->raw(
-                'SELECT id, amount FROM savings_transactions
+                'SELECT id, amount, description FROM savings_transactions
                  WHERE member_id = ? AND type = ? AND reference_no = ? LIMIT 1',
                 [$member_id, 'withdrawal', $reference]
             )->fetch(PDO::FETCH_ASSOC);
@@ -85,7 +147,8 @@ class ApiSavings extends Controller
             if ($balance_cents === false) {
                 throw new RuntimeException('The member balance could not be calculated.');
             }
-            if ($existing && self::money_to_cents((string) $existing['amount']) !== $amount) {
+            if ($existing && (self::money_to_cents((string) $existing['amount']) !== $amount
+                || ($existing['description'] ?? '') !== 'Simulated withdrawal successful to ' . $destinations[$channel_value] . '; no money transferred')) {
                 throw new DomainException('This request identifier was already used for a different withdrawal.');
             }
 
@@ -99,7 +162,7 @@ class ApiSavings extends Controller
                     'amount' => self::format_cents($amount),
                     'balance_after' => self::format_cents($balance_cents - $amount),
                     'reference_no' => $reference,
-                    'description' => 'Simulated withdrawal; no money transferred',
+                    'description' => 'Simulated withdrawal successful to ' . $destinations[$channel_value] . '; no money transferred',
                     'created_by_user_id' => (int) $user['id']
                 ]);
                 if (!$transaction_id) {
@@ -112,7 +175,8 @@ class ApiSavings extends Controller
                     'details' => json_encode([
                         'member_id' => $member_id,
                         'amount' => self::format_cents($amount),
-                        'reference_no' => $reference
+                        'reference_no' => $reference,
+                        'destination' => $destinations[$channel_value]
                     ], JSON_UNESCAPED_SLASHES)
                 ]);
                 if (!$log_id) {
@@ -133,7 +197,7 @@ class ApiSavings extends Controller
         $this->api->respond([
             'message' => $existing
                 ? 'This simulated withdrawal was already recorded.'
-                : 'Simulated withdrawal completed. No money was transferred.',
+                : 'Simulated withdrawal successful to ' . $destinations[$channel_value] . '. No money was transferred.',
             'reference_no' => $reference,
             'balance' => self::format_cents($balance_cents)
         ]);

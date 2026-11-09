@@ -42,6 +42,13 @@ SELECT refunds.member_id,
        NULL
 FROM coopwise_legacy_withdrawal_refunds AS refunds;
 
+UPDATE savings_transactions AS transaction_row
+INNER JOIN savings_withdrawal_requests AS pending
+    ON pending.member_id = transaction_row.member_id
+   AND pending.savings_reference_no = transaction_row.reference_no
+INNER JOIN coopwise_legacy_withdrawal_refunds AS refunds ON refunds.request_id = pending.id
+SET transaction_row.description = 'Legacy simulated withdrawal refunded when staff review was retired';
+
 UPDATE savings_withdrawal_requests AS pending
 INNER JOIN coopwise_legacy_withdrawal_refunds AS refunds ON refunds.request_id = pending.id
 SET pending.status = 'rejected',
