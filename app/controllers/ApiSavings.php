@@ -46,6 +46,99 @@ class ApiSavings extends Controller
         ]);
     }
 
+    public function withdraw()
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if ($user['role'] !== 'member') {
+            $this->api->respond_error('Only members can simulate a withdrawal.', 403);
+        }
+        $this->api->rate_limit('savings-withdrawal:' . (int) $user['id'], 30, 3600);
+        $member = $this->member_profile($user);
+        $data = $this->api->body();
+        $amount_value = $data['amount'] ?? null;
+        $request_id_value = $data['request_id'] ?? null;
+        if (!is_string($amount_value) || !is_string($request_id_value)) {
+            $this->api->respond_error('Enter a valid withdrawal amount and request identifier.', 422);
+        }
+        $amount = self::money_to_cents(trim($amount_value));
+        $request_id = strtolower(trim($request_id_value));
+        if ($amount === false || $amount < 1 || !preg_match(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $request_id
+        )) {
+            $this->api->respond_error('Enter a valid withdrawal amount and request identifier.', 422);
+        }
+
+        $reference = 'CW-WD-' . strtoupper(str_replace('-', '', $request_id));
+        $member_id = (int) $member['id'];
+        $balance_cents = 0;
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [$member_id])->fetch();
+            $existing = $this->db->raw(
+                'SELECT id, amount FROM savings_transactions
+                 WHERE member_id = ? AND type = ? AND reference_no = ? LIMIT 1',
+                [$member_id, 'withdrawal', $reference]
+            )->fetch(PDO::FETCH_ASSOC);
+            $balance_cents = $this->member_balance($member_id);
+            if ($balance_cents === false) {
+                throw new RuntimeException('The member balance could not be calculated.');
+            }
+            if ($existing && self::money_to_cents((string) $existing['amount']) !== $amount) {
+                throw new DomainException('This request identifier was already used for a different withdrawal.');
+            }
+
+            if (!$existing) {
+                if ($amount > $balance_cents) {
+                    throw new DomainException('The withdrawal amount exceeds your available member balance.');
+                }
+                $transaction_id = $this->db->table('savings_transactions')->insert([
+                    'member_id' => $member_id,
+                    'type' => 'withdrawal',
+                    'amount' => self::format_cents($amount),
+                    'balance_after' => self::format_cents($balance_cents - $amount),
+                    'reference_no' => $reference,
+                    'description' => 'Simulated withdrawal; no money transferred',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$transaction_id) {
+                    throw new RuntimeException('The simulated withdrawal could not be recorded.');
+                }
+                $log_id = $this->db->table('activity_logs')->insert([
+                    'user_id' => (int) $user['id'],
+                    'module' => 'savings',
+                    'action' => 'simulated_withdrawal',
+                    'details' => json_encode([
+                        'member_id' => $member_id,
+                        'amount' => self::format_cents($amount),
+                        'reference_no' => $reference
+                    ], JSON_UNESCAPED_SLASHES)
+                ]);
+                if (!$log_id) {
+                    throw new RuntimeException('The simulated withdrawal audit record could not be saved.');
+                }
+                $balance_cents -= $amount;
+            }
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise simulated withdrawal failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => $existing
+                ? 'This simulated withdrawal was already recorded.'
+                : 'Simulated withdrawal completed. No money was transferred.',
+            'reference_no' => $reference,
+            'balance' => self::format_cents($balance_cents)
+        ]);
+    }
+
     public function auto_pay_preferences()
     {
         $this->api->require_method('POST');

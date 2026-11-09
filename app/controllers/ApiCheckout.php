@@ -67,14 +67,13 @@ class ApiCheckout extends Controller
         $cycle_id = filter_var($data['cycle_id'] ?? null, FILTER_VALIDATE_INT);
         $subscription_id = filter_var($data['subscription_id'] ?? null, FILTER_VALIDATE_INT);
 
-        if (!in_array($purpose, ['savings', 'loan', 'paluwagan', 'share_capital'], true)
+        if (!in_array($purpose, ['loan', 'paluwagan', 'share_capital'], true)
             || $amount === false || $amount < 100 || $amount > 100000000) {
             $this->api->respond_error('Choose a payment purpose and an amount from PHP 1.00 to PHP 1,000,000.00.', 422);
         }
         if (($purpose === 'loan' && (!$loan_id || $cycle_id || $subscription_id))
             || ($purpose === 'paluwagan' && (!$cycle_id || $loan_id || $subscription_id))
-            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))
-            || ($purpose === 'savings' && ($loan_id || $cycle_id || $subscription_id))) {
+            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))) {
             $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
         }
 
@@ -442,8 +441,7 @@ class ApiCheckout extends Controller
             try {
                 switch ($payment['purpose']) {
                     case 'savings':
-                        $this->apply_savings_deposit($payment);
-                        break;
+                        throw new DomainException('Xendit savings deposits are no longer supported; no member balance was credited.');
                     case 'loan':
                         $this->apply_loan_payment($payment);
                         break;
@@ -499,32 +497,6 @@ class ApiCheckout extends Controller
             $this->db->roll_back();
             throw $error;
         }
-    }
-
-    private function apply_savings_deposit(array $payment)
-    {
-        $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $payment['member_id']])->fetch();
-        $sums = $this->db->raw(
-            "SELECT
-                COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) AS deposits,
-                COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END), 0) AS withdrawals
-             FROM savings_transactions WHERE member_id = ?",
-            [(int) $payment['member_id']]
-        )->fetch(PDO::FETCH_ASSOC);
-        $balance = self::money_to_cents((string) $sums['deposits']) - self::money_to_cents((string) $sums['withdrawals']);
-        $inserted = $this->db->table('savings_transactions')->insert([
-            'member_id' => (int) $payment['member_id'],
-            'type' => 'deposit',
-            'amount' => $payment['amount'],
-            'balance_after' => self::format_cents($balance + self::money_to_cents((string) $payment['amount'])),
-            'reference_no' => $payment['reference_no'],
-            'description' => 'Xendit-confirmed savings deposit.',
-            'created_by_user_id' => null
-        ]);
-        if (!$inserted) {
-            throw new RuntimeException('The confirmed savings deposit could not be recorded.');
-        }
-
     }
 
     private function apply_loan_payment(array $payment)

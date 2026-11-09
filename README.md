@@ -27,8 +27,9 @@ reuse its branding, images, or website copy.
    to add the loan-product limit and daily cooperative-cycle tables.
    Import `database/coopwise_documents_payments_upgrade.sql` for both new and
    existing databases to add protected loan documents and payment submissions.
-   Run `database/coopwise_financial_workflows_upgrade.sql` to add withdrawal
-   requests and member-controlled savings auto-payment preferences.
+   Run `database/coopwise_financial_workflows_upgrade.sql` to add the legacy
+   withdrawal-history table and member-controlled savings auto-payment
+   preferences.
    Run `database/coopwise_share_capital_upgrade.sql` after those upgrades to
    add separate share subscriptions, paid-up contribution records, and
    auditable reversals, and enable the internal simulated loan-payment method.
@@ -36,12 +37,17 @@ reuse its branding, images, or website copy.
    payment ledger, webhook idempotency records, password-reset OTP storage,
    and Xendit payment-method values. This migration depends on the loan,
    cooperative-cycle, and share-capital tables from the earlier upgrades.
-   Then run `database/coopwise_governance_upgrade.sql` to add cooperative
-   meetings, member polls, and one-vote-per-active-member records. New
-   databases receive these tables from `database/coopwise_schema.sql`.
+   On an existing database, run `database/coopwise_member_balance_upgrade.sql`
+   to credit previously paid Paluwagan payouts to available demo balances, and
+   `database/coopwise_retire_savings_withdrawals_upgrade.sql` to refund any
+   old pending withdrawal simulations. These one-time migrations preserve the
+   underlying transaction and request history.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
+   If a previous CoopWise version created meeting or voting tables, run
+   `database/coopwise_remove_governance_upgrade.sql` after backing up the
+   database. It permanently removes those tables and their poll/vote records.
    Existing accounts must have an email or linked member phone number to sign
    in after the registration upgrade. Do not drop the existing tables.
 5. Copy `.env.example` to `.env` and set your local database values if they
@@ -93,31 +99,26 @@ constraint. Make a database backup before applying it.
   multiple selected members with a randomized payout order, and activate it.
   Each enrolled member contributes once per day through Xendit checkout.
   Once all confirmed contributions for a day are recorded, the system creates
-  a payout for the next person in order; staff still confirm when the pooled
-  payout is disbursed. Further contributions wait until that confirmation.
-  The cycle completes after every enrolled member has received one payout.
-- Staff can post a meeting and open a poll with two to six choices. Active
-  members can vote once; the system stores the choice privately and shows
-  members only aggregate results after the poll closes. Staff can review
-  recent loan decisions, payment confirmations, Paluwagan payout confirmations,
-  share-capital corrections, and governance actions in the activity history.
-  The poll is a classroom governance tool and does not replace cooperative
-  bylaws, formal notice, quorum, or legally required meeting and election
-  procedures.
-- Savings deposits are added after Xendit confirms payment, and withdrawals
-  remain simulated staff-managed requests. Members can view only their own
-  savings history. The
+  a payout for the next person in order; staff confirm the simulated payout,
+  which credits the recipient's available member balance. Xendit only collects
+  contributions; no real outbound payout is made. Further contributions wait
+  until confirmation. The cycle completes after every enrolled member has
+  received one payout.
+- Members' available demo balance is funded by approved loan proceeds and
+  confirmed Paluwagan payouts. Xendit savings deposits are no longer offered.
+  Members can simulate a withdrawal that immediately debits their own balance;
+  no staff review or real transfer occurs. Repeated network submissions with
+  the same request identifier do not double-debit the account. Members can view
+  only their own transaction history. The
   authenticated `/api/savings/ledger` endpoint returns the signed-in member's
   selected period with opening/closing balances and transaction totals;
   `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
   `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
-- Loan approval credits the approved principal to the member's savings ledger
+- Loan approval credits the approved principal to the member's available balance
   within the same database transaction that creates the amortization schedule.
-  Members can request a simulated withdrawal that reserves an amount from their
-  savings ledger without collecting financial-account details. Staff complete
-  or reject the simulation; rejecting a request returns the reserved amount.
-  No money is transferred. Members see only their own history; staff can search,
-  filter, sort, and page through all requests.
+  The new withdrawal endpoint writes a withdrawal ledger entry in a locked
+  transaction and records an audit event. No bank/e-wallet details are
+  collected and no money is transferred.
 - Members may separately opt in to loan-installment and/or daily Paluwagan
   payments from savings. Both preferences are off by default. When enabled,
   `scripts/daily_savings_auto_pay.php` processes due amounts and records the
@@ -138,7 +139,8 @@ constraint. Make a database backup before applying it.
   the next scan. Keep the production `COOPWISE_JWT_SECRET` set to a strong,
   private value because it signs both access tokens and member-card QR tokens.
 - Members use a server-created Xendit Hosted Checkout session to make
-  savings, loan, Paluwagan, or share-capital payments. The backend applies a
+  loan, Paluwagan, or share-capital payments. New savings-deposit checkouts are
+  disabled, while prior payment records remain readable. The backend applies a
   payment only after the backend verifies the Xendit webhook token and a
   server-side Xendit status check confirms it. Members see only their own
   transactions; staff can view the cooperative transaction history. The
@@ -148,8 +150,9 @@ constraint. Make a database backup before applying it.
   are stored hashed, expire after ten minutes, and have a limited number of
   attempts. Sending email requires a Brevo API key and a verified sender.
 - Staff may enroll multiple selected members in a Paluwagan cycle; the backend
-  randomizes their payout order. Xendit collects contributions only; it
-  does not send the pooled Paluwagan payout, which staff must still confirm.
+  randomizes their payout order. Xendit collects contributions only; it does
+  not send the pooled Paluwagan payout. Staff confirmation adds the payout to
+  the recipient's demo balance without moving real money.
 - Existing demo payment-submission records are retained, but the new frontend
   and API no longer use the staff submission-approval flow. This upgrade does
   not erase financial history.
@@ -162,7 +165,8 @@ constraint. Make a database backup before applying it.
   manner and limitations of lending and borrowing in cooperative bylaws
   ([Lawphil text](https://lawphil.net/statutes/repacts/ra2009/ra_9520_2009.html)).
 - Staff can view cooperative-wide reports. Member dashboards show only that
-  member's activity.
+  member's activity. The staff Reports page also shows the 50 most recent
+  application audit events; member meetings and voting are not included.
 - Share capital is tracked separately from savings. Staff create subscriptions
   using cooperative-approved share counts and par values. Members can pay the
   unpaid amount through Xendit checkout. Corrections are retained as linked
@@ -192,10 +196,10 @@ cycle enrollment, contributions, payout readiness, and staff payout
 confirmation. Share capital subscriptions and contributions are separate from
 savings, with a member-only ledger view and staff-controlled, auditable
 transaction reversals. Xendit-confirmed payments update the appropriate
-ledger. Loan approvals credit the principal into savings. Members may request
-and track simulated withdrawals; staff complete or reject/refund requests
-without transferring money. Members can also explicitly opt in to loan or
-Paluwagan auto-pay from savings.
+ledger. Loan approvals and confirmed Paluwagan payouts credit the member's
+available balance. Members can immediately simulate withdrawals; no staff
+review or real transfer is involved. Members can also explicitly opt in to loan
+or Paluwagan auto-pay from their available balance.
 Other legacy pages remain in the LavaLust app and have not yet been migrated to
 the separate frontend.
 

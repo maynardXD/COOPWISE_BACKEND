@@ -61,6 +61,14 @@ class ApiReports extends Controller
         $loan_statuses = $this->db->raw(
             'SELECT status, COUNT(*) AS total FROM loans GROUP BY status ORDER BY status ASC'
         )->fetchAll(PDO::FETCH_ASSOC);
+        $activity_logs = $this->db->raw(
+            'SELECT al.id, al.module, al.action, al.details, al.created_at,
+                    u.full_name AS actor_name, u.role AS actor_role
+             FROM activity_logs al
+             LEFT JOIN users u ON u.id = al.user_id
+             ORDER BY al.created_at DESC, al.id DESC
+             LIMIT 50'
+        )->fetchAll(PDO::FETCH_ASSOC);
 
         $savings_by_type = ['deposit' => '0.00', 'withdrawal' => '0.00'];
         foreach ($monthly_savings as $row) {
@@ -89,7 +97,8 @@ class ApiReports extends Controller
                 'loan_applications' => $applications_by_status,
                 'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', '')
             ],
-            'loan_statuses' => $loan_statuses
+            'loan_statuses' => $loan_statuses,
+            'activity_logs' => $activity_logs
         ]);
     }
 

@@ -403,9 +403,50 @@ class ApiCooperative extends Controller
         }
         $this->db->transaction();
         try {
-            $payout = $this->db->table('cooperative_payouts')->where('id', $payout_id)->get();
+            $payout = $this->db->raw(
+                'SELECT * FROM cooperative_payouts WHERE id = ? FOR UPDATE',
+                [(int) $payout_id]
+            )->fetch(PDO::FETCH_ASSOC);
             if (!$payout || $payout['status'] !== 'ready') {
                 throw new DomainException('This payout is not awaiting confirmation.');
+            }
+            $this->db->raw(
+                'SELECT id FROM members WHERE id = ? FOR UPDATE',
+                [(int) $payout['member_id']]
+            )->fetch();
+            $payout_amount = self::money_to_cents((string) $payout['amount']);
+            $balance = $this->db->raw(
+                "SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END), 0) AS balance
+                 FROM savings_transactions WHERE member_id = ?",
+                [(int) $payout['member_id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            $balance_cents = self::money_to_cents((string) ($balance['balance'] ?? '0.00'));
+            if ($payout_amount === false || $balance_cents === false) {
+                throw new RuntimeException('The Paluwagan payout balance could not be calculated.');
+            }
+            $ledger_reference = 'CW-PALUWAGAN-' . strtoupper((string) $payout['reference_no']);
+            $existing_credit = $this->db->raw(
+                'SELECT amount FROM savings_transactions
+                 WHERE member_id = ? AND type = ? AND reference_no = ? LIMIT 1',
+                [(int) $payout['member_id'], 'deposit', $ledger_reference]
+            )->fetch(PDO::FETCH_ASSOC);
+            if ($existing_credit) {
+                if (self::money_to_cents((string) $existing_credit['amount']) !== $payout_amount) {
+                    throw new RuntimeException('A conflicting Paluwagan payout credit already exists.');
+                }
+            } else {
+                $credit_id = $this->db->table('savings_transactions')->insert([
+                    'member_id' => (int) $payout['member_id'],
+                    'type' => 'deposit',
+                    'amount' => self::format_cents($payout_amount),
+                    'balance_after' => self::format_cents($balance_cents + $payout_amount),
+                    'reference_no' => $ledger_reference,
+                    'description' => 'Paluwagan payout credited to available member balance',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$credit_id) {
+                    throw new RuntimeException('The Paluwagan payout could not be credited to the member balance.');
+                }
             }
             $updated = $this->db->table('cooperative_payouts')
                 ->where('id', $payout_id)
@@ -427,7 +468,10 @@ class ApiCooperative extends Controller
             }
             $this->write_activity_log((int) $user['id'], 'cooperative', 'payout_confirmed', [
                 'payout_id' => (int) $payout_id,
-                'cycle_id' => (int) $payout['cycle_id']
+                'cycle_id' => (int) $payout['cycle_id'],
+                'member_id' => (int) $payout['member_id'],
+                'amount_credited' => self::format_cents($payout_amount),
+                'ledger_reference' => $ledger_reference
             ]);
             $this->db->commit();
         } catch (DomainException $error) {
@@ -438,7 +482,7 @@ class ApiCooperative extends Controller
             error_log('CoopWise API payout confirmation failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'Payout marked paid.']);
+        $this->api->respond(['message' => 'Paluwagan payout marked paid and added to the member’s available balance.']);
     }
 
     private function authenticated_user()
