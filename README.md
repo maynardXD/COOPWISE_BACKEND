@@ -51,6 +51,19 @@ reuse its branding, images, or website copy.
    Run `database/coopwise_policies_upgrade.sql` to add editable sample
    cooperative policies for the Learning Center. It creates only the missing
    table and inserts its default row only if that row is absent.
+   Then run `database/coopwise_cooperative_finance_upgrade.sql` to add
+   configurable loan-eligibility rules, a separate simulated lending-pool
+   ledger, principal/interest repayment breakdowns, and annual surplus/member
+   returns. An unpublished draft can be cancelled and recalculated; an approved
+   return is published as a calculation only and is not automatically paid or
+   credited. This migration depends on the cooperative policies, loan, savings,
+   and share-capital tables and is required before deploying the updated API;
+   back up the database first. The lending pool starts at PHP 0.00, so staff
+   must record simulated funding before approving loans. Loan approval leaves
+   member share capital unchanged. Surplus calculations remain drafts until
+   staff approval; the classroom patronage basis is loan interest paid during
+   the fiscal year. Verify actual bylaws, accounting, and required approvals
+   before applying any real cooperative rules.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
@@ -84,9 +97,10 @@ strong and private.
 ### How the application works
 
 Run `php tests/financial_workflows.php` from this repository to verify deposit
-idempotency, ledger balance updates, money parsing, and pagination bounds. The
-test uses an in-memory fake database and never connects to a configured or
-production database.
+idempotency, loan eligibility, repayment allocation, surplus percentage rules,
+member-return rounding, money parsing, and pagination bounds. The test uses an
+in-memory fake database and never connects to a configured or production
+database.
 
 - Controllers in `app/controllers` handle routes and coordinate requests.
 - Models and LavaLust's database query builder handle MySQL access; application
@@ -115,7 +129,10 @@ production database.
   pay through Xendit checkout or deduct the payment from available savings.
   Xendit payments update after provider confirmation; savings-funded payments
   debit the member balance and apply the payment together in one database
-  transaction.
+  transaction. Staff maintain a separate simulated loan fund and approval
+  checks its available balance; a disbursement does not reduce a member's
+  share capital. The backend applies repayments to scheduled interest and
+  principal separately and records both amounts for member and staff reports.
 - Staff create a daily cooperative cycle, set the contribution amount, enroll
   multiple selected members with a randomized payout order, and activate it.
   Each enrolled member contributes once per day through Xendit checkout.
@@ -127,8 +144,14 @@ production database.
   received one payout.
 - The Cooperative Learning Center explains member ownership, share capital,
   loans, Paluwagan, and demo balance behavior. Staff can edit sample policies
-  for this project; they are not universal cooperative rules. The guided demo
-  uses labeled fictional examples and does not create or reset database data.
+  for this project, including membership duration, minimum paid-up share
+  capital/savings, and the loan-to-share-capital limit; they are not universal
+  cooperative rules. Staff may draft an annual surplus allocation using
+  completed-year paid-up share capital for interest-on-share-capital weights
+  and loan interest paid as a classroom patronage proxy. Drafts require staff
+  approval before members see them; the workflow is a teaching simulation, not
+  statutory accounting or a guarantee of dividends. The guided demo uses
+  labeled fictional examples and does not create or reset database data.
 - Members' available demo balance is funded by approved loan proceeds,
   confirmed Paluwagan payouts, and deposits confirmed through Xendit Test Mode.
   A deposit is recorded only after the backend verifies the provider status;

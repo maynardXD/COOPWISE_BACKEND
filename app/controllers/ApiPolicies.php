@@ -21,7 +21,10 @@ class ApiPolicies extends Controller
         $this->require_policy_schema();
         $policy = $this->db->raw(
             'SELECT membership_policy, share_capital_policy, loan_policy,
-                    paluwagan_policy, demo_balance_policy, updated_at
+                    paluwagan_policy, demo_balance_policy, minimum_membership_days,
+                    minimum_paid_up_share_capital, minimum_savings_balance,
+                    loan_to_paid_up_share_capital_multiplier, cooperative_registration_date,
+                    updated_at
              FROM cooperative_policies WHERE id = 1'
         )->fetch(PDO::FETCH_ASSOC);
         if (!$policy) {
@@ -56,6 +59,26 @@ class ApiPolicies extends Controller
             }
             $policy[$field] = $value;
         }
+        $minimum_membership_days = filter_var(
+            $data['minimum_membership_days'] ?? null,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 0, 'max_range' => 3650]]
+        );
+        $minimum_share_capital = self::money_to_cents(trim((string) ($data['minimum_paid_up_share_capital'] ?? '')));
+        $minimum_savings = self::money_to_cents(trim((string) ($data['minimum_savings_balance'] ?? '')));
+        $multiplier = trim((string) ($data['loan_to_paid_up_share_capital_multiplier'] ?? ''));
+        $registration_date = trim((string) ($data['cooperative_registration_date'] ?? ''));
+        if ($minimum_membership_days === false || $minimum_share_capital === false || $minimum_savings === false
+            || !preg_match('/^(?:0|[1-9]\d{0,2})(?:\.\d{1,2})?$/', $multiplier)
+            || (float) $multiplier > 100
+            || ($registration_date !== '' && !self::valid_date($registration_date))) {
+            $this->api->respond_error('Enter valid loan eligibility values and a valid cooperative registration date.', 422);
+        }
+        $policy['minimum_membership_days'] = $minimum_membership_days;
+        $policy['minimum_paid_up_share_capital'] = self::format_cents($minimum_share_capital);
+        $policy['minimum_savings_balance'] = self::format_cents($minimum_savings);
+        $policy['loan_to_paid_up_share_capital_multiplier'] = number_format((float) $multiplier, 2, '.', '');
+        $policy['cooperative_registration_date'] = $registration_date !== '' ? $registration_date : null;
         $policy['updated_by_user_id'] = (int) $user['id'];
         $this->db->transaction();
         try {
@@ -102,16 +125,42 @@ class ApiPolicies extends Controller
 
     private function require_policy_schema()
     {
-        $exists = $this->db->raw(
-            "SELECT COUNT(*) FROM information_schema.tables
-             WHERE table_schema = DATABASE() AND table_name = 'cooperative_policies'"
+        $columns = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = 'cooperative_policies'
+               AND column_name IN (
+                   'membership_policy', 'share_capital_policy', 'loan_policy',
+                   'paluwagan_policy', 'demo_balance_policy', 'minimum_membership_days',
+                   'minimum_paid_up_share_capital', 'minimum_savings_balance',
+                   'loan_to_paid_up_share_capital_multiplier', 'cooperative_registration_date'
+               )"
         )->fetchColumn();
-        if ((int) $exists !== 1) {
+        if ((int) $columns !== 10) {
             error_log('CoopWise policy schema is missing; apply database/coopwise_policies_upgrade.sql.');
             $this->api->respond_error(
-                'Cooperative policies are not configured in the database yet. Run database/coopwise_policies_upgrade.sql in Navicat, then retry.',
+                'Cooperative policies are not configured in the database yet. Run database/coopwise_policies_upgrade.sql and database/coopwise_cooperative_finance_upgrade.sql in Navicat, then retry.',
                 503
             );
         }
+    }
+
+    private static function money_to_cents(string $amount)
+    {
+        if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
+            return false;
+        }
+        [$whole, $fraction] = array_pad(explode('.', $amount, 2), 2, '');
+        return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
+    }
+
+    private static function format_cents(int $amount)
+    {
+        return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
+    }
+
+    private static function valid_date(string $date)
+    {
+        $parsed = DateTime::createFromFormat('!Y-m-d', $date);
+        return $parsed && $parsed->format('Y-m-d') === $date && $date <= date('Y-m-d');
     }
 }

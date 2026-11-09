@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS loan_schedules (
     interest_due DECIMAL(12,2) NOT NULL,
     total_due DECIMAL(12,2) NOT NULL,
     paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    principal_paid DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    interest_paid DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     status ENUM('pending','paid','overdue') NOT NULL DEFAULT 'pending',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -165,6 +167,9 @@ CREATE TABLE IF NOT EXISTS loan_payments (
     member_id INT UNSIGNED NOT NULL,
     paid_by_user_id INT UNSIGNED NULL,
     amount_paid DECIMAL(12,2) NOT NULL,
+    principal_paid DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    interest_paid DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    breakdown_recorded TINYINT(1) NOT NULL DEFAULT 0,
     payment_method ENUM('simulation','cash','bank','gcash','check','xendit','paymongo','savings') NOT NULL DEFAULT 'cash',
     reference_no VARCHAR(100) NOT NULL,
     payment_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -179,6 +184,80 @@ CREATE TABLE IF NOT EXISTS loan_payments (
     CONSTRAINT fk_payments_loan FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_payments_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_payments_user FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cooperative_loan_fund (
+    id TINYINT UNSIGNED NOT NULL,
+    available_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    updated_by_user_id INT UNSIGNED NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_cooperative_loan_fund_updater FOREIGN KEY (updated_by_user_id)
+        REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO cooperative_loan_fund (id, available_balance) VALUES (1, 0.00);
+
+CREATE TABLE IF NOT EXISTS cooperative_loan_fund_transactions (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    transaction_type ENUM('funding','loan_disbursement','loan_repayment') NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    balance_after DECIMAL(12,2) NOT NULL,
+    reference_no VARCHAR(100) NOT NULL,
+    loan_id INT UNSIGNED NULL,
+    description VARCHAR(255) NULL,
+    created_by_user_id INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_cooperative_loan_fund_reference (reference_no),
+    KEY idx_cooperative_loan_fund_created (created_at, id),
+    CONSTRAINT fk_cooperative_loan_fund_transaction_loan FOREIGN KEY (loan_id)
+        REFERENCES loans(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_cooperative_loan_fund_transaction_creator FOREIGN KEY (created_by_user_id)
+        REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    fiscal_year SMALLINT UNSIGNED NOT NULL,
+    net_surplus DECIMAL(12,2) NOT NULL,
+    reserve_allocation DECIMAL(12,2) NOT NULL,
+    education_allocation DECIMAL(12,2) NOT NULL,
+    community_allocation DECIMAL(12,2) NOT NULL,
+    optional_allocation DECIMAL(12,2) NOT NULL,
+    share_capital_pool DECIMAL(12,2) NOT NULL,
+    patronage_pool DECIMAL(12,2) NOT NULL,
+    status ENUM('draft','approved','cancelled') NOT NULL DEFAULT 'draft',
+    created_by_user_id INT UNSIGNED NOT NULL,
+    approved_by_user_id INT UNSIGNED NULL,
+    approved_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_surplus_distribution_year_status (fiscal_year, status),
+    CONSTRAINT fk_surplus_distribution_creator FOREIGN KEY (created_by_user_id)
+        REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_surplus_distribution_approver FOREIGN KEY (approved_by_user_id)
+        REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cooperative_member_returns (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    distribution_id INT UNSIGNED NOT NULL,
+    member_id INT UNSIGNED NOT NULL,
+    paid_up_share_capital DECIMAL(12,2) NOT NULL,
+    patronage_basis DECIMAL(12,2) NOT NULL,
+    interest_on_share_capital DECIMAL(12,2) NOT NULL,
+    patronage_refund DECIMAL(12,2) NOT NULL,
+    total_return DECIMAL(12,2) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_surplus_member_return (distribution_id, member_id),
+    KEY idx_member_return_member_created (member_id, created_at, id),
+    CONSTRAINT fk_member_return_distribution FOREIGN KEY (distribution_id)
+        REFERENCES cooperative_surplus_distributions(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_member_return_member FOREIGN KEY (member_id)
+        REFERENCES members(id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -247,6 +326,11 @@ CREATE TABLE IF NOT EXISTS cooperative_policies (
     loan_policy TEXT NOT NULL,
     paluwagan_policy TEXT NOT NULL,
     demo_balance_policy TEXT NOT NULL,
+    minimum_membership_days SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+    minimum_paid_up_share_capital DECIMAL(12,2) NOT NULL DEFAULT 5000.00,
+    minimum_savings_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    loan_to_paid_up_share_capital_multiplier DECIMAL(6,2) NOT NULL DEFAULT 1.00,
+    cooperative_registration_date DATE NULL,
     updated_by_user_id INT UNSIGNED NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),

@@ -1,6 +1,8 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
+
 class ApiCheckout extends Controller
 {
     private $api;
@@ -725,11 +727,35 @@ class ApiCheckout extends Controller
             throw new DomainException('The paid loan repayment no longer matches an eligible loan balance.');
         }
 
+        $schedules = $this->db->table('loan_schedules')
+            ->where('loan_id', (int) $loan['id'])
+            ->in('status', ['pending', 'overdue'])
+            ->order_by('due_date', 'ASC')
+            ->get_all();
+        try {
+            $allocation = allocateLoanRepayment($amount, $schedules);
+        } catch (InvalidArgumentException $error) {
+            throw new DomainException($error->getMessage());
+        }
+        foreach ($allocation['schedules'] as $schedule) {
+            $this->db->table('loan_schedules')->where('id', (int) $schedule['id'])->update([
+                'paid_amount' => $schedule['paid_amount'],
+                'principal_paid' => $schedule['principal_paid'],
+                'interest_paid' => $schedule['interest_paid'],
+                'status' => $schedule['status']
+            ]);
+        }
+        $principal_paid = $allocation['principal_paid'];
+        $interest_paid = $allocation['interest_paid'];
+
         $inserted = $this->db->table('loan_payments')->insert([
             'loan_id' => (int) $loan['id'],
             'member_id' => (int) $payment['member_id'],
             'paid_by_user_id' => $payment['paid_by_user_id'] ?? null,
             'amount_paid' => $payment['amount'],
+            'principal_paid' => self::format_cents($principal_paid),
+            'interest_paid' => self::format_cents($interest_paid),
+            'breakdown_recorded' => 1,
             'payment_method' => $payment['payment_method'] ?? 'xendit',
             'reference_no' => $payment['reference_no'],
             'payment_date' => date('Y-m-d H:i:s')
@@ -737,32 +763,39 @@ class ApiCheckout extends Controller
         if (!$inserted) {
             throw new RuntimeException('The confirmed loan payment could not be recorded.');
         }
-        $remaining = $amount;
-        $schedules = $this->db->table('loan_schedules')
-            ->where('loan_id', (int) $loan['id'])
-            ->in('status', ['pending', 'overdue'])
-            ->order_by('due_date', 'ASC')
-            ->get_all();
-        foreach ($schedules as $schedule) {
-            if ($remaining < 1) {
-                break;
-            }
-            $unpaid = max(0, self::money_to_cents((string) $schedule['total_due'])
-                - self::money_to_cents((string) $schedule['paid_amount']));
-            $applied = min($remaining, $unpaid);
-            $paid = self::money_to_cents((string) $schedule['paid_amount']) + $applied;
-            $this->db->table('loan_schedules')->where('id', (int) $schedule['id'])->update([
-                'paid_amount' => self::format_cents($paid),
-                'status' => $paid >= self::money_to_cents((string) $schedule['total_due']) ? 'paid' : $schedule['status']
-            ]);
-            $remaining -= $applied;
-        }
         $new_balance = $balance - $amount;
         $this->db->table('loans')->where('id', (int) $loan['id'])->update([
             'current_balance' => self::format_cents($new_balance),
             'total_paid' => self::format_cents(self::money_to_cents((string) $loan['total_paid']) + $amount),
             'status' => $new_balance === 0 ? 'completed' : 'active'
         ]);
+
+        $fund = $this->db->raw(
+            'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1 FOR UPDATE'
+        )->fetch(PDO::FETCH_ASSOC);
+        if (!$fund) {
+            throw new RuntimeException('The cooperative loan fund is not configured for loan repayments.');
+        }
+        $fund_balance = self::money_to_cents((string) $fund['available_balance']) + $amount;
+        $fund_updated = $this->db->table('cooperative_loan_fund')->where('id', 1)->update([
+            'available_balance' => self::format_cents($fund_balance)
+        ]);
+        if ($fund_updated === false) {
+            throw new RuntimeException('The cooperative lending-pool balance could not be updated for this repayment.');
+        }
+        $fund_transaction_id = $this->db->table('cooperative_loan_fund_transactions')->insert([
+            'transaction_type' => 'loan_repayment',
+            'amount' => self::format_cents($amount),
+            'balance_after' => self::format_cents($fund_balance),
+            'reference_no' => 'CW-FUND-REPAY-' . $payment['reference_no'],
+            'loan_id' => (int) $loan['id'],
+            'description' => 'Confirmed loan repayment (principal ' . self::format_cents($principal_paid)
+                . ', interest ' . self::format_cents($interest_paid) . ').',
+            'created_by_user_id' => $payment['paid_by_user_id'] ?? null
+        ]);
+        if (!$fund_transaction_id) {
+            throw new RuntimeException('The lending-pool repayment history could not be saved.');
+        }
     }
 
     private function apply_savings_deposit(array $payment)

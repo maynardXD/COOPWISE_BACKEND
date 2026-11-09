@@ -23,6 +23,7 @@ class ApiReports extends Controller
         }
         $this->require_share_capital_schema();
         $this->require_table('loan_readiness_submissions', 'database/coopwise_documents_payments_upgrade.sql');
+        $this->require_finance_schema();
 
         $period_start = new DateTimeImmutable('first day of this month');
         $period_end = $period_start->modify('first day of next month');
@@ -33,6 +34,19 @@ class ApiReports extends Controller
         $savings_withdrawals = $this->sum('savings_transactions', 'amount', 'type', 'withdrawal');
         $loan_balance = $this->sum('loans', 'current_balance');
         $loan_payments = $this->sum('loan_payments', 'amount_paid');
+        $loan_interest_received = $this->sum('loan_payments', 'interest_paid');
+        $loan_principal_receivable = $this->db->raw(
+            'SELECT COALESCE(SUM(GREATEST(principal_due - principal_paid, 0)), 0) AS total FROM loan_schedules'
+        )->fetch(PDO::FETCH_ASSOC);
+        $loan_fund = $this->db->raw(
+            'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1'
+        )->fetch(PDO::FETCH_ASSOC);
+        $approved_member_returns = $this->db->raw(
+            "SELECT COALESCE(SUM(r.total_return), 0) AS total
+             FROM cooperative_member_returns r
+             INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
+             WHERE d.status = 'approved'"
+        )->fetch(PDO::FETCH_ASSOC);
         $share_capital_subscribed = $this->sum('share_capital_subscriptions', 'subscribed_amount');
         $share_capital_paid = $this->db->raw(
             "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END), 0) AS total
@@ -48,6 +62,12 @@ class ApiReports extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
         $monthly_loan_payments = $this->db->raw(
             'SELECT COALESCE(SUM(amount_paid), 0) AS total FROM loan_payments WHERE payment_date >= ? AND payment_date < ?',
+            [$start, $end]
+        )->fetch(PDO::FETCH_ASSOC);
+        $monthly_loan_payment_split = $this->db->raw(
+            'SELECT COALESCE(SUM(principal_paid), 0) AS principal,
+                    COALESCE(SUM(interest_paid), 0) AS interest
+             FROM loan_payments WHERE payment_date >= ? AND payment_date < ?',
             [$start, $end]
         )->fetch(PDO::FETCH_ASSOC);
         $monthly_share_capital_payments = $this->db->raw(
@@ -102,7 +122,11 @@ class ApiReports extends Controller
                 'share_capital_subscribed' => self::format_cents(self::money_to_cents((string) $share_capital_subscribed)),
                 'share_capital_paid_up' => self::format_cents(self::money_to_cents((string) ($share_capital_paid['total'] ?? '0.00'))),
                 'loan_balance' => number_format((float) $loan_balance, 2, '.', ''),
-                'loan_payments_received' => number_format((float) $loan_payments, 2, '.', '')
+                'loan_principal_receivable' => number_format((float) ($loan_principal_receivable['total'] ?? 0), 2, '.', ''),
+                'loan_fund_available' => number_format((float) ($loan_fund['available_balance'] ?? 0), 2, '.', ''),
+                'loan_payments_received' => number_format((float) $loan_payments, 2, '.', ''),
+                'loan_interest_received' => number_format((float) $loan_interest_received, 2, '.', ''),
+                'approved_member_returns' => number_format((float) ($approved_member_returns['total'] ?? 0), 2, '.', '')
             ],
             'monthly' => [
                 'new_members' => $monthly_members,
@@ -110,7 +134,9 @@ class ApiReports extends Controller
                 'savings_withdrawals' => $savings_by_type['withdrawal'],
                 'share_capital_payments' => self::format_cents(self::money_to_cents((string) ($monthly_share_capital_payments['total'] ?? '0.00'))),
                 'loan_applications' => $applications_by_status,
-                'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', '')
+                'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', ''),
+                'loan_principal_received' => number_format((float) ($monthly_loan_payment_split['principal'] ?? 0), 2, '.', ''),
+                'loan_interest_received' => number_format((float) ($monthly_loan_payment_split['interest'] ?? 0), 2, '.', '')
             ],
             'loan_statuses' => $loan_statuses,
             'activity_logs' => $activity_logs,
@@ -154,6 +180,36 @@ class ApiReports extends Controller
             error_log('CoopWise report schema is missing table ' . $table . '; apply ' . $migration . '.');
             $this->api->respond_error(
                 'Operational reports are not configured in the database yet. Apply ' . $migration . ' in Navicat, then retry.',
+                503
+            );
+        }
+    }
+
+    private function require_finance_schema()
+    {
+        $tables = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name IN (
+                 'cooperative_loan_fund', 'cooperative_loan_fund_transactions',
+                 'cooperative_surplus_distributions', 'cooperative_member_returns'
+             )"
+        )->fetchColumn();
+        $columns = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND (
+                 (table_name = 'cooperative_policies' AND column_name IN (
+                     'minimum_membership_days', 'minimum_paid_up_share_capital',
+                     'minimum_savings_balance', 'loan_to_paid_up_share_capital_multiplier',
+                     'cooperative_registration_date'
+                 )) OR
+                 (table_name = 'loan_payments' AND column_name IN ('principal_paid', 'interest_paid', 'breakdown_recorded')) OR
+                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid'))
+             )"
+        )->fetchColumn();
+        if ((int) $tables !== 4 || (int) $columns !== 10) {
+            error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
+            $this->api->respond_error(
+                'Cooperative finance reports are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
                 503
             );
         }
