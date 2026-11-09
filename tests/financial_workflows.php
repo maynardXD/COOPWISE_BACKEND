@@ -123,6 +123,10 @@ assertSameValue(0, autoPayLoanAmount(0, 8000, 10000), 'Auto-pay should skip an i
 $eligibility = cooperativeLoanEligibility(500000, 0, 50000, 45, false, true, 500000, 0, 30, 1.0, 300000);
 assertSameValue(true, $eligibility['eligible'], 'A qualified member should be able to apply within the product cap');
 assertSameValue(300000, $eligibility['max_eligible_amount_cents'], 'The eligible amount should respect the product cap and existing exposure');
+$simulatedMembershipDays = new ReflectionFunction('cooperativeSimulatedMembershipDays');
+assertSameValue(0, $simulatedMembershipDays->invoke(5), 'A simulated membership day should not complete before six seconds');
+assertSameValue(1, $simulatedMembershipDays->invoke(6), 'One simulated membership day should complete after six seconds');
+assertSameValue(30, $simulatedMembershipDays->invoke(180), 'The default 30-day membership requirement should take three minutes in the demo');
 $ineligible = cooperativeLoanEligibility(400000, 0, 0, 20, false, true, 500000, 0, 30, 1.0);
 assertSameValue(false, $ineligible['eligible'], 'Members below configured share and membership thresholds should not be eligible');
 assertSameValue(2, count($ineligible['reasons']), 'Eligibility should explain each unmet sample-policy requirement');

@@ -16,6 +16,14 @@ function cooperativeFormatCents(int $amount): string
     return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
 }
 
+function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecondsPerDay = 6): int
+{
+    if ($elapsedSeconds < 0 || $realSecondsPerDay < 1) {
+        throw new InvalidArgumentException('Simulated membership time must be non-negative.');
+    }
+    return intdiv($elapsedSeconds, $realSecondsPerDay);
+}
+
 function cooperativeLoanEligibility(
     int $paidUpShareCapital,
     int $savingsBalance,

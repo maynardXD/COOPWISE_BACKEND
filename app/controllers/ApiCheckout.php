@@ -5,6 +5,8 @@ require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
 
 class ApiCheckout extends Controller
 {
+    private const LATE_CANCELLED_PAYMENT_NOTE = 'Xendit confirmed payment after the member cancelled checkout.';
+
     private $api;
     private $db;
 
@@ -403,6 +405,13 @@ class ApiCheckout extends Controller
         if (!$transaction) {
             $this->api->respond_error('Payment transaction not found.', 404);
         }
+        if ($transaction['status'] === 'needs_review'
+            && self::is_late_cancelled_payment($transaction['review_note'] ?? null)) {
+            $this->api->respond([
+                'message' => 'Xendit confirmed this payment after cancellation. It was not applied; cooperative staff must review it.',
+                'status' => 'needs_review'
+            ]);
+        }
         if (!in_array($transaction['status'], ['pending', 'needs_review'], true) || !$transaction['provider_checkout_id']) {
             $this->api->respond(['message' => 'Payment status is ' . $transaction['status'] . '.', 'status' => $transaction['status']]);
         }
@@ -439,6 +448,96 @@ class ApiCheckout extends Controller
         $this->api->respond([
             'message' => 'Payment status checked.',
             'status' => $updated['status'] ?? 'pending'
+        ]);
+    }
+
+    public function cancel($transaction_id = null)
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if ($user['role'] !== 'member') {
+            $this->api->respond_error('Only members can cancel their own pending checkout.', 403);
+        }
+        $this->require_payment_schema();
+        $member = $this->member_profile($user);
+        $transaction_id = filter_var($transaction_id, FILTER_VALIDATE_INT);
+        if (!$transaction_id || $transaction_id < 1) {
+            $this->api->respond_error('Choose a valid payment transaction.', 422);
+        }
+        $transaction = $this->db->table('payment_transactions')
+            ->where('id', (int) $transaction_id)
+            ->where('member_id', (int) $member['id'])
+            ->get();
+        if (!$transaction) {
+            $this->api->respond_error('Payment transaction not found.', 404);
+        }
+        if ($transaction['status'] !== 'pending') {
+            $this->api->respond_error('Only a pending checkout can be cancelled.', 409);
+        }
+
+        if (!empty($transaction['provider_checkout_id'])) {
+            $this->require_xendit_config();
+            try {
+                $session = $this->xendit_request(
+                    'GET',
+                    '/sessions/' . rawurlencode((string) $transaction['provider_checkout_id'])
+                );
+                if (strtoupper((string) ($session['status'] ?? '')) === 'COMPLETED') {
+                    [$paid_amount, $paid_currency] = self::checkout_amount_and_currency($session);
+                    $this->apply_paid_checkout(
+                        (int) $transaction['id'],
+                        (string) $transaction['provider_checkout_id'],
+                        $paid_amount,
+                        $paid_currency,
+                        !empty($session['payment_request_id']) ? (string) $session['payment_request_id'] : null,
+                        (string) ($session['reference_id'] ?? '')
+                    );
+                    $this->api->respond_error('Xendit already confirmed this payment, so it cannot be cancelled.', 409);
+                }
+            } catch (DomainException $error) {
+                $this->api->respond_error($error->getMessage(), 409);
+            } catch (Throwable $error) {
+                error_log('CoopWise Xendit cancellation check failed for transaction ' . (int) $transaction_id . ': ' . $error->getMessage());
+                $this->api->respond_error('Xendit could not confirm the payment status. The checkout was not cancelled; please retry shortly.', 502);
+            }
+        }
+
+        $this->db->transaction();
+        try {
+            $locked = $this->db->raw(
+                'SELECT id, purpose, status FROM payment_transactions
+                 WHERE id = ? AND member_id = ? FOR UPDATE',
+                [(int) $transaction_id, (int) $member['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$locked || $locked['status'] !== 'pending') {
+                throw new DomainException('This payment is no longer pending and cannot be cancelled.');
+            }
+            $updated = $this->db->table('payment_transactions')
+                ->where('id', (int) $transaction_id)
+                ->where('member_id', (int) $member['id'])
+                ->where('status', 'pending')
+                ->update([
+                    'status' => 'cancelled',
+                    'checkout_url' => null,
+                    'review_note' => null
+                ]);
+            if ($updated !== 1) {
+                throw new DomainException('This payment is no longer pending and cannot be cancelled.');
+            }
+            $this->write_activity_log((int) $user['id'], 'payments', 'checkout_cancelled_by_member', [
+                'transaction_id' => (int) $transaction_id,
+                'purpose' => $locked['purpose']
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
+        }
+        $this->api->respond([
+            'message' => 'The pending CoopWise checkout was cancelled and its reservation released. Close the old Xendit checkout without paying, then retry using savings.'
         ]);
     }
 
@@ -638,6 +737,30 @@ class ApiCheckout extends Controller
                 throw new DomainException('The provider payment does not match the stored CoopWise transaction.');
             }
             if ($payment['applied_at'] !== null && $payment['status'] === 'paid') {
+                $this->db->commit();
+                return;
+            }
+            if ($payment['status'] === 'cancelled') {
+                $this->db->table('payment_transactions')
+                    ->where('id', $transaction_id)
+                    ->where('status', 'cancelled')
+                    ->update([
+                        'status' => 'needs_review',
+                        'provider_payment_id' => $provider_payment_id,
+                        'provider_fee' => $provider_fee === null ? null : self::format_cents($provider_fee),
+                        'net_amount' => $net_amount === null ? null : self::format_cents($net_amount),
+                        'paid_at' => date('Y-m-d H:i:s'),
+                        'review_note' => self::LATE_CANCELLED_PAYMENT_NOTE . ' Staff must reconcile the external payment; CoopWise did not apply it.'
+                    ]);
+                $this->write_activity_log(null, 'payments', 'late_payment_after_cancellation', [
+                    'transaction_id' => $transaction_id,
+                    'purpose' => $payment['purpose']
+                ]);
+                $this->db->commit();
+                return;
+            }
+            if ($payment['status'] === 'needs_review'
+                && self::is_late_cancelled_payment($payment['review_note'] ?? null)) {
                 $this->db->commit();
                 return;
             }
@@ -1086,6 +1209,11 @@ class ApiCheckout extends Controller
         if (!$id) {
             throw new RuntimeException('The payment audit record could not be saved.');
         }
+    }
+
+    private static function is_late_cancelled_payment(?string $review_note): bool
+    {
+        return $review_note !== null && strpos($review_note, self::LATE_CANCELLED_PAYMENT_NOTE) === 0;
     }
 
     private static function money_to_cents(string $amount)

@@ -611,9 +611,9 @@ class ApiLoans extends Controller
         if (!$policies) {
             throw new RuntimeException('Cooperative loan eligibility policies are not configured.');
         }
-        $joined = new DateTimeImmutable(substr((string) $member['created_at'], 0, 10));
-        $today = new DateTimeImmutable('today');
-        $membership_days = max(0, (int) $joined->diff($today)->format('%r%a'));
+        $joined = new DateTimeImmutable((string) $member['created_at']);
+        $membership_elapsed_seconds = max(0, time() - $joined->getTimestamp());
+        $membership_days = cooperativeSimulatedMembershipDays($membership_elapsed_seconds);
         $documents = $this->latest_readiness($member_id);
         $eligibility = cooperativeLoanEligibility(
             max(0, self::money_to_cents((string) ($capital['total'] ?? '0.00'))),
@@ -635,10 +635,13 @@ class ApiLoans extends Controller
             'savings_balance' => self::format_cents(max(0, self::money_to_cents((string) ($savings['total'] ?? '0.00')))),
             'active_loan_balance' => self::format_cents(max(0, self::money_to_cents((string) ($active['total'] ?? '0.00')))),
             'membership_days' => $membership_days,
+            'membership_elapsed_seconds' => $membership_elapsed_seconds,
+            'membership_checked_at' => time(),
             'criteria' => [
                 'minimum_paid_up_share_capital' => self::format_cents(self::money_to_cents((string) $policies['minimum_paid_up_share_capital'])),
                 'minimum_savings_balance' => self::format_cents(self::money_to_cents((string) $policies['minimum_savings_balance'])),
                 'minimum_membership_days' => (int) $policies['minimum_membership_days'],
+                'membership_required_seconds' => (int) $policies['minimum_membership_days'] * 6,
                 'loan_to_paid_up_share_capital_multiplier' => (float) $policies['loan_to_paid_up_share_capital_multiplier']
             ],
             'reasons' => $eligibility['reasons']

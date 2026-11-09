@@ -64,6 +64,14 @@ reuse its branding, images, or website copy.
    staff approval; the classroom patronage basis is loan interest paid during
    the fiscal year. Verify actual bylaws, accounting, and required approvals
    before applying any real cooperative rules.
+   For this classroom simulation only, each configured membership day passes
+   in six real seconds; the default 30-day eligibility period therefore takes
+   three minutes. This accelerated clock is not suitable for real cooperative
+   eligibility decisions.
+   Members can cancel a pending CoopWise checkout to release its reservation
+   and retry with savings. They must close the old Xendit checkout without
+   paying; any late provider confirmation is flagged for staff review rather
+   than applied to the member ledger.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
