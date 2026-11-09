@@ -32,7 +32,6 @@ class ApiCheckout extends Controller
             ->select("p.id, p.member_id, p.purpose, p.amount, p.currency, p.provider_fee, p.net_amount, p.reference_no,
                       p.loan_id, p.cycle_id, p.subscription_id, p.status, p.checkout_url,
                       p.review_note, p.created_at, p.paid_at, p.applied_at,
-                      CASE WHEN p.reference_no LIKE 'CW-SAV-PAY-%' THEN 'savings' ELSE 'xendit' END AS payment_method,
                       m.member_number, m.first_name, m.last_name")
             ->inner_join('members m', 'm.id = p.member_id');
         if ($member) {
@@ -42,6 +41,10 @@ class ApiCheckout extends Controller
         $transactions = $query->order_by('p.created_at', 'DESC')->order_by('p.id', 'DESC')
             ->limit($pagination['offset'], $pagination['per_page'] + 1)
             ->get_all();
+        foreach ($transactions as &$transaction) {
+            $transaction['payment_method'] = self::payment_method_for_reference((string) $transaction['reference_no']);
+        }
+        unset($transaction);
         $has_more = count($transactions) > $pagination['per_page'];
         if ($has_more) {
             array_pop($transactions);
@@ -1064,5 +1067,10 @@ class ApiCheckout extends Controller
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
+    }
+
+    private static function payment_method_for_reference(string $reference_no): string
+    {
+        return strpos($reference_no, 'CW-SAV-PAY-') === 0 ? 'savings' : 'xendit';
     }
 }
