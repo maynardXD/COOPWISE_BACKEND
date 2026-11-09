@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS savings_transactions (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_savings_member (member_id),
+    KEY idx_savings_member_created (member_id, created_at, id),
+    KEY idx_savings_created (created_at, id),
     KEY idx_savings_type (type),
     CONSTRAINT fk_savings_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_savings_created_by FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
@@ -91,6 +93,8 @@ CREATE TABLE IF NOT EXISTS share_capital_transactions (
     UNIQUE KEY uq_share_capital_transaction_reference (transaction_reference),
     UNIQUE KEY uq_share_capital_reverses_transaction (reverses_transaction_id),
     KEY idx_share_capital_transaction_member (member_id),
+    KEY idx_share_capital_transaction_member_created (member_id, created_at, id),
+    KEY idx_share_capital_transaction_created (created_at, id),
     KEY idx_share_capital_transaction_subscription (subscription_id),
     KEY idx_share_capital_transaction_type (transaction_type),
     CONSTRAINT fk_share_capital_transaction_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -170,6 +174,8 @@ CREATE TABLE IF NOT EXISTS loan_payments (
     UNIQUE KEY uq_loan_payments_reference (reference_no),
     KEY idx_payments_loan (loan_id),
     KEY idx_payments_member (member_id),
+    KEY idx_payments_member_date (member_id, payment_date, id),
+    KEY idx_payments_date (payment_date, id),
     CONSTRAINT fk_payments_loan FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_payments_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_payments_user FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
@@ -200,6 +206,38 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     KEY idx_activity_module (module),
     KEY idx_activity_user (user_id),
     CONSTRAINT fk_activity_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id INT UNSIGNED NOT NULL,
+    token TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    jti TEXT NOT NULL,
+    PRIMARY KEY (id),
+    KEY user_id_idx (user_id),
+    KEY idx_refresh_tokens_expiry (expires_at),
+    CONSTRAINT fk_refresh_tokens_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS auto_pay_runs (
+    run_id CHAR(32) NOT NULL,
+    status ENUM('running','completed','failed') NOT NULL DEFAULT 'running',
+    started_at DATETIME NOT NULL,
+    completed_at DATETIME NULL,
+    members_checked INT UNSIGNED NOT NULL DEFAULT 0,
+    loan_installments INT UNSIGNED NOT NULL DEFAULT 0,
+    paluwagan_contributions INT UNSIGNED NOT NULL DEFAULT 0,
+    partial_loan_installments INT UNSIGNED NOT NULL DEFAULT 0,
+    skipped_loan_installments INT UNSIGNED NOT NULL DEFAULT 0,
+    skipped_paluwagan_contributions INT UNSIGNED NOT NULL DEFAULT 0,
+    error_count INT UNSIGNED NOT NULL DEFAULT 0,
+    details TEXT NULL,
+    PRIMARY KEY (run_id),
+    KEY idx_auto_pay_runs_started (started_at),
+    KEY idx_auto_pay_runs_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS cooperative_policies (
@@ -264,6 +302,8 @@ CREATE TABLE IF NOT EXISTS cooperative_contributions (
     PRIMARY KEY (id),
     UNIQUE KEY uq_coop_daily_contribution (cycle_id, member_id, contribution_date),
     UNIQUE KEY uq_coop_contribution_reference (reference_no),
+    KEY idx_coop_contribution_member_date (member_id, contribution_date, id),
+    KEY idx_coop_contribution_date (contribution_date, id),
     CONSTRAINT fk_coop_contributions_cycle FOREIGN KEY (cycle_id) REFERENCES cooperative_cycles(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_coop_contributions_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_coop_contributions_recorder FOREIGN KEY (recorded_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
@@ -285,6 +325,8 @@ CREATE TABLE IF NOT EXISTS cooperative_payouts (
     UNIQUE KEY uq_coop_cycle_payout_member (cycle_id, member_id),
     UNIQUE KEY uq_coop_cycle_payout_order (cycle_id, payout_order),
     UNIQUE KEY uq_coop_payout_reference (reference_no),
+    KEY idx_coop_payout_member_date (member_id, payout_date, id),
+    KEY idx_coop_payout_date (payout_date, id),
     CONSTRAINT fk_coop_payouts_cycle FOREIGN KEY (cycle_id) REFERENCES cooperative_cycles(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_coop_payouts_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_coop_payouts_recorder FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
@@ -317,6 +359,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     UNIQUE KEY uq_payment_transaction_checkout (provider_checkout_id),
     UNIQUE KEY uq_payment_transaction_provider_payment (provider_payment_id),
     KEY idx_payment_transaction_member (member_id, created_at),
+    KEY idx_payment_transaction_created (created_at, id),
     KEY idx_payment_transaction_status (status, created_at),
     KEY idx_payment_transaction_cycle_date (cycle_id, member_id, business_date, status),
     CONSTRAINT fk_payment_transaction_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE RESTRICT ON UPDATE CASCADE,

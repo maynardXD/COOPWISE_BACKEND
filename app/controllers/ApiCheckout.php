@@ -38,7 +38,22 @@ class ApiCheckout extends Controller
         if ($member) {
             $query->where('p.member_id', (int) $member['id']);
         }
-        $this->api->respond(['transactions' => $query->order_by('p.created_at', 'DESC')->get_all()]);
+        $pagination = $this->api->pagination_params();
+        $transactions = $query->order_by('p.created_at', 'DESC')->order_by('p.id', 'DESC')
+            ->limit($pagination['offset'], $pagination['per_page'] + 1)
+            ->get_all();
+        $has_more = count($transactions) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($transactions);
+        }
+        $this->api->respond([
+            'transactions' => $transactions,
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $has_more
+            ]
+        ]);
     }
 
     public function create_checkout()
@@ -61,14 +76,21 @@ class ApiCheckout extends Controller
         $subscription_id = filter_var($data['subscription_id'] ?? null, FILTER_VALIDATE_INT);
 
         if (!in_array($payment_method, ['xendit', 'savings'], true)
-            || !in_array($purpose, ['loan', 'paluwagan', 'share_capital'], true)
+            || !in_array($purpose, ['loan', 'paluwagan', 'share_capital', 'savings'], true)
             || $amount === false || $amount < 100 || $amount > 100000000) {
             $this->api->respond_error('Choose a supported payment method, purpose, and amount from PHP 1.00 to PHP 1,000,000.00.', 422);
         }
         if (($purpose === 'loan' && (!$loan_id || $cycle_id || $subscription_id))
             || ($purpose === 'paluwagan' && (!$cycle_id || $loan_id || $subscription_id))
-            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))) {
+            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))
+            || ($purpose === 'savings' && ($loan_id || $cycle_id || $subscription_id))) {
             $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
+        }
+        if ($purpose === 'savings' && ($payment_method !== 'xendit' || self::xendit_mode() !== 'test')) {
+            $this->api->respond_error('Savings deposits are available only through Xendit Test Mode.', 403);
+        }
+        if ($payment_method === 'savings' && $purpose === 'savings') {
+            $this->api->respond_error('A savings deposit cannot be funded from the savings balance.', 422);
         }
         if ($payment_method === 'savings' && !preg_match(
             '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
@@ -626,7 +648,11 @@ class ApiCheckout extends Controller
             try {
                 switch ($payment['purpose']) {
                     case 'savings':
-                        throw new DomainException('Xendit savings deposits are no longer supported; no member balance was credited.');
+                        if (self::xendit_mode() !== 'test') {
+                            throw new DomainException('Savings deposits can only be applied from Xendit Test Mode.');
+                        }
+                        $this->apply_savings_deposit($payment);
+                        break;
                     case 'loan':
                         $this->apply_loan_payment($payment);
                         break;
@@ -695,6 +721,7 @@ class ApiCheckout extends Controller
             || $balance === false || $amount > $balance) {
             throw new DomainException('The paid loan repayment no longer matches an eligible loan balance.');
         }
+
         $inserted = $this->db->table('loan_payments')->insert([
             'loan_id' => (int) $loan['id'],
             'member_id' => (int) $payment['member_id'],
@@ -733,6 +760,47 @@ class ApiCheckout extends Controller
             'total_paid' => self::format_cents(self::money_to_cents((string) $loan['total_paid']) + $amount),
             'status' => $new_balance === 0 ? 'completed' : 'active'
         ]);
+    }
+
+    private function apply_savings_deposit(array $payment)
+    {
+        $member_id = (int) $payment['member_id'];
+        $this->db->raw('SELECT id FROM members WHERE id = ? AND status = ? FOR UPDATE', [$member_id, 'active'])->fetch();
+        $member = $this->db->raw('SELECT id FROM members WHERE id = ? AND status = ?', [$member_id, 'active'])
+            ->fetch(PDO::FETCH_ASSOC);
+        $amount = self::money_to_cents((string) $payment['amount']);
+        if (!$member || $amount === false || $amount < 1) {
+            throw new DomainException('The savings deposit does not match an active member account.');
+        }
+
+        $existing = $this->db->raw(
+            'SELECT amount FROM savings_transactions
+             WHERE member_id = ? AND type = ? AND reference_no = ? LIMIT 1',
+            [$member_id, 'deposit', (string) $payment['reference_no']]
+        )->fetch(PDO::FETCH_ASSOC);
+        if ($existing) {
+            if (self::money_to_cents((string) $existing['amount']) !== $amount) {
+                throw new DomainException('The existing savings entry does not match this payment.');
+            }
+            return;
+        }
+
+        $balance = $this->member_balance($member_id);
+        if ($balance === false) {
+            throw new RuntimeException('The member savings balance could not be calculated.');
+        }
+        $inserted = $this->db->table('savings_transactions')->insert([
+            'member_id' => $member_id,
+            'type' => 'deposit',
+            'amount' => self::format_cents($amount),
+            'balance_after' => self::format_cents($balance + $amount),
+            'reference_no' => (string) $payment['reference_no'],
+            'description' => 'Xendit Test Mode deposit confirmed by provider',
+            'created_by_user_id' => null
+        ]);
+        if (!$inserted) {
+            throw new RuntimeException('The confirmed savings deposit could not be recorded.');
+        }
     }
 
     private function apply_paluwagan_payment(array $payment)
@@ -891,9 +959,9 @@ class ApiCheckout extends Controller
         $tables = $this->db->raw(
             "SELECT table_name FROM information_schema.tables
              WHERE table_schema = DATABASE()
-               AND table_name IN ('payment_transactions', 'payment_webhook_events')"
+               AND table_name IN ('payment_transactions', 'payment_webhook_events', 'savings_transactions')"
         )->fetchAll(PDO::FETCH_COLUMN);
-        if (count($tables) !== 2) {
+        if (count($tables) !== 3) {
             error_log('CoopWise payment schema is missing; apply database/coopwise_xendit_email_upgrade.sql.');
             $this->api->respond_error(
                 'Online payments are not configured in the database yet. Apply database/coopwise_xendit_email_upgrade.sql, then retry.',

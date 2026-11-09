@@ -159,9 +159,16 @@ class ApiCooperative extends Controller
         if ($member) {
             $contribution_query->where('cc.member_id', (int) $member['id']);
         }
+        $contribution_pagination = $this->api->pagination_params(50, 100, 'contribution_page');
         $contributions = $contribution_query
             ->order_by('cc.contribution_date', 'DESC')
+            ->order_by('cc.id', 'DESC')
+            ->limit($contribution_pagination['offset'], $contribution_pagination['per_page'] + 1)
             ->get_all();
+        $contributions_has_more = count($contributions) > $contribution_pagination['per_page'];
+        if ($contributions_has_more) {
+            array_pop($contributions);
+        }
 
         $payout_query = $this->db->table('cooperative_payouts cp')
             ->select('cp.id, cp.cycle_id, cp.member_id, cp.payout_order, cp.payout_date, cp.amount, cp.reference_no, cp.status, cp.paid_at, c.name AS cycle_name, m.member_number, m.first_name, m.last_name')
@@ -170,14 +177,31 @@ class ApiCooperative extends Controller
         if ($member) {
             $payout_query->where('cp.member_id', (int) $member['id']);
         }
+        $payout_pagination = $this->api->pagination_params(50, 100, 'payout_page');
         $payouts = $payout_query
             ->order_by('cp.payout_date', 'DESC')
+            ->order_by('cp.id', 'DESC')
+            ->limit($payout_pagination['offset'], $payout_pagination['per_page'] + 1)
             ->get_all();
+        $payouts_has_more = count($payouts) > $payout_pagination['per_page'];
+        if ($payouts_has_more) {
+            array_pop($payouts);
+        }
 
         $this->api->respond([
             'cycles' => $cycles,
             'contributions' => $contributions,
+            'contributions_pagination' => [
+                'page' => $contribution_pagination['page'],
+                'per_page' => $contribution_pagination['per_page'],
+                'has_more' => $contributions_has_more
+            ],
             'payouts' => $payouts,
+            'payouts_pagination' => [
+                'page' => $payout_pagination['page'],
+                'per_page' => $payout_pagination['per_page'],
+                'has_more' => $payouts_has_more
+            ],
             'members' => $user['role'] === 'member' ? [] : $this->db->table('members')
                 ->select('id, member_number, first_name, last_name')
                 ->where('status', 'active')

@@ -39,6 +39,10 @@ reuse its branding, images, or website copy.
    cooperative-cycle, and share-capital tables from the earlier upgrades.
    Run `database/coopwise_savings_payment_upgrade.sql` to enable savings-funded
    repayments and share-capital contributions in existing databases.
+   Run `database/coopwise_runtime_upgrade.sql` once to add refresh-session
+   storage, daily auto-pay run monitoring, and financial-history indexes.
+   This upgrade is required before deploying the updated API because Render's
+   readiness check depends on it; back up the database first.
    On an existing database, run `database/coopwise_member_balance_upgrade.sql`
    to credit previously paid Paluwagan payouts to available demo balances, and
    `database/coopwise_retire_savings_withdrawals_upgrade.sql` to refund any
@@ -72,7 +76,17 @@ longer used by the app. When upgrading an existing database, the registration
 upgrade removes the old username column after adding the phone uniqueness
 constraint. Make a database backup before applying it.
 
+The React client stores a short-lived access token and a seven-day rotating
+refresh token in per-tab session storage. Refresh tokens are hashed in
+`refresh_tokens` and revoked at sign-out. Keep `COOPWISE_REFRESH_TOKEN_KEY`
+strong and private.
+
 ### How the application works
+
+Run `php tests/financial_workflows.php` from this repository to verify deposit
+idempotency, ledger balance updates, money parsing, and pagination bounds. The
+test uses an in-memory fake database and never connects to a configured or
+production database.
 
 - Controllers in `app/controllers` handle routes and coordinate requests.
 - Models and LavaLust's database query builder handle MySQL access; application
@@ -115,8 +129,11 @@ constraint. Make a database backup before applying it.
   loans, Paluwagan, and demo balance behavior. Staff can edit sample policies
   for this project; they are not universal cooperative rules. The guided demo
   uses labeled fictional examples and does not create or reset database data.
-- Members' available demo balance is funded by approved loan proceeds and
-  confirmed Paluwagan payouts. Xendit savings deposits are no longer offered.
+- Members' available demo balance is funded by approved loan proceeds,
+  confirmed Paluwagan payouts, and deposits confirmed through Xendit Test Mode.
+  A deposit is recorded only after the backend verifies the provider status;
+  returning from checkout or a browser action cannot credit the ledger.
+  Deposits are rejected if Xendit is configured for live mode.
   Members can simulate a withdrawal that immediately debits their own balance;
   no staff review or real transfer occurs. Repeated network submissions with
   the same request identifier do not double-debit the account. Members choose
@@ -142,6 +159,10 @@ constraint. Make a database backup before applying it.
   installments. The Savings page also includes member balance summaries,
   member search, date/type/reference filters, individual ledger links, and
   filtered CSV export. Staff do not get an unlogged balance-edit control.
+  Savings, loan, share-capital, and checkout histories support server-side
+  pagination (50 rows by default, up to 100 per request). Savings search and
+  date/type filters are applied by the backend, and CSV export walks every
+  matching page.
   Reports require the loan-document table from
   `database/coopwise_documents_payments_upgrade.sql`; the endpoint reports a
   clear migration error if that table is absent.
@@ -155,6 +176,9 @@ constraint. Make a database backup before applying it.
   daily CLI job before members enable this feature. Schedule it after the
   cooperative's business-day boundary, use the same database and TLS settings
   as the web service, and monitor the job's JSON output and server error log.
+  Each run also writes status, processed/partial/skipped counts, and errors to
+  `auto_pay_runs`; inspect recent runs with
+  `SELECT * FROM auto_pay_runs ORDER BY started_at DESC LIMIT 20;`.
   The script never initiates an external payment.
 - Members can issue their own printable ID card from `/api/member-card`, while
   staff can issue a selected member's card through
@@ -165,13 +189,18 @@ constraint. Make a database backup before applying it.
   the next scan. Keep the production `COOPWISE_JWT_SECRET` set to a strong,
   private value because it signs both access tokens and member-card QR tokens.
 - Members use a server-created Xendit Hosted Checkout session to make
-  loan, Paluwagan, or share-capital payments. New savings-deposit checkouts are
-  disabled, while prior payment records remain readable. The backend applies a
-  payment only after the backend verifies the Xendit webhook token and a
+  loan, Paluwagan, and share-capital payments, or add a savings deposit using
+  Xendit Test Mode. Deposits are applied only after the backend verifies
+  provider confirmation; repeated confirmations are idempotent. The backend
+  applies a payment only after it verifies the Xendit webhook token and a
   server-side Xendit status check confirms it. Members see only their own
   transactions; staff can view the cooperative transaction history. The
   integration defaults to Xendit test mode and requires provider credentials
   and a configured webhook.
+- `/api/health` is a liveness check that does not require the database.
+  `/api/health/ready` checks database connectivity and required CoopWise tables
+  without returning connection details. Render uses the readiness endpoint
+  after the runtime database upgrade has been applied.
 - Password reset uses a six-digit, one-time code emailed through Brevo. Codes
   are stored hashed, expire after ten minutes, and have a limited number of
   attempts. Sending email requires a Brevo API key and a verified sender.

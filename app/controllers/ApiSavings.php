@@ -25,38 +25,89 @@ class ApiSavings extends Controller
             $this->require_staff($user);
         }
 
-        $query = $this->db->table('savings_transactions s')
-            ->select('s.id, s.member_id, s.type, s.amount, s.balance_after, s.reference_no, s.description, s.created_at, m.member_number, m.first_name, m.last_name')
-            ->inner_join('members m', 'm.id = s.member_id');
+        $conditions = [];
+        $params = [];
         if ($member) {
-            $query->where('s.member_id', (int) $member['id']);
+            $conditions[] = 's.member_id = ?';
+            $params[] = (int) $member['id'];
         }
-        $transactions = $query->order_by('s.created_at', 'DESC')->get_all();
+        $type = trim((string) ($_GET['type'] ?? ''));
+        if ($type !== '') {
+            if (!in_array($type, ['deposit', 'withdrawal'], true)) {
+                $this->api->respond_error('Choose a valid savings transaction type.', 422);
+            }
+            $conditions[] = 's.type = ?';
+            $params[] = $type;
+        }
+        foreach (['from' => '>=', 'to' => '<='] as $field => $operator) {
+            $date = trim((string) ($_GET[$field] ?? ''));
+            if ($date !== '') {
+                $parsed = DateTime::createFromFormat('!Y-m-d', $date);
+                if (!$parsed || $parsed->format('Y-m-d') !== $date) {
+                    $this->api->respond_error('Enter valid savings transaction dates.', 422);
+                }
+                $conditions[] = 's.created_at ' . $operator . ' ?';
+                $params[] = $date . ($field === 'from' ? ' 00:00:00' : ' 23:59:59');
+            }
+        }
+        $search = trim((string) ($_GET['q'] ?? ''));
+        if (strlen($search) > 120) {
+            $this->api->respond_error('Savings search text is too long.', 422);
+        }
+        if ($search !== '') {
+            $conditions[] = "CONCAT_WS(' ', m.member_number, m.first_name, m.last_name, s.reference_no, s.description) LIKE ?";
+            $params[] = '%' . $search . '%';
+        }
+        $pagination = $this->api->pagination_params();
+        $where = $conditions ? 'WHERE ' . implode(' AND ', $conditions) : '';
+        $transactions = $this->db->raw(
+            "SELECT s.id, s.member_id, s.type, s.amount, s.balance_after, s.reference_no, s.description,
+                    s.created_at, m.member_number, m.first_name, m.last_name
+             FROM savings_transactions s
+             INNER JOIN members m ON m.id = s.member_id
+             {$where}
+             ORDER BY s.created_at DESC, s.id DESC
+             LIMIT " . (int) ($pagination['per_page'] + 1) . ' OFFSET ' . (int) $pagination['offset'],
+            $params
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $has_more = count($transactions) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($transactions);
+        }
         $balance = null;
         $balance_breakdown = null;
         $member_balances = [];
         $summary = null;
         if ($member) {
             $balance = $this->member_balance((int) $member['id']);
-            $breakdown = ['loan_credits' => 0, 'paluwagan_credits' => 0, 'other_credits' => 0, 'withdrawals' => 0];
-            foreach ($transactions as $transaction) {
-                $amount = self::money_to_cents((string) $transaction['amount']);
-                if ($amount === false) {
-                    throw new RuntimeException('A member transaction amount could not be calculated.');
+            $breakdown = $this->db->raw(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END), 0) AS withdrawals,
+                    COALESCE(SUM(CASE WHEN type = 'deposit' AND
+                        (LOWER(COALESCE(description, '')) LIKE '%paluwagan payout%'
+                         OR UPPER(COALESCE(reference_no, '')) LIKE 'CW-PALUWAGAN-%')
+                        THEN amount ELSE 0 END), 0) AS paluwagan_credits,
+                    COALESCE(SUM(CASE WHEN type = 'deposit' AND
+                        (LOWER(COALESCE(description, '')) LIKE '%loan%'
+                         OR UPPER(COALESCE(reference_no, '')) LIKE 'CW-DISBURSE-%')
+                        THEN amount ELSE 0 END), 0) AS loan_credits,
+                    COALESCE(SUM(CASE WHEN type = 'deposit' AND
+                        LOWER(COALESCE(description, '')) NOT LIKE '%paluwagan payout%'
+                        AND UPPER(COALESCE(reference_no, '')) NOT LIKE 'CW-PALUWAGAN-%'
+                        AND LOWER(COALESCE(description, '')) NOT LIKE '%loan%'
+                        AND UPPER(COALESCE(reference_no, '')) NOT LIKE 'CW-DISBURSE-%'
+                        THEN amount ELSE 0 END), 0) AS other_credits
+                 FROM savings_transactions WHERE member_id = ?",
+                [(int) $member['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            $balance_breakdown = [];
+            foreach ($breakdown as $key => $amount) {
+                $cents = self::money_to_cents((string) $amount);
+                if ($cents === false) {
+                    throw new RuntimeException('A member savings breakdown could not be calculated.');
                 }
-                $description = strtolower((string) ($transaction['description'] ?? ''));
-                $reference = strtoupper((string) ($transaction['reference_no'] ?? ''));
-                if ($transaction['type'] === 'withdrawal') {
-                    $breakdown['withdrawals'] += $amount;
-                } elseif (strpos($description, 'paluwagan payout') !== false || strpos($reference, 'CW-PALUWAGAN-') === 0) {
-                    $breakdown['paluwagan_credits'] += $amount;
-                } elseif (strpos($description, 'loan') !== false || strpos($reference, 'CW-DISBURSE-') === 0) {
-                    $breakdown['loan_credits'] += $amount;
-                } else {
-                    $breakdown['other_credits'] += $amount;
-                }
+                $balance_breakdown[$key] = self::format_cents($cents);
             }
-            $balance_breakdown = array_map([self::class, 'format_cents'], $breakdown);
         } else {
             $member_balances = $this->db->raw(
                 "SELECT m.id, m.member_number, m.first_name, m.last_name, m.status,
@@ -89,6 +140,11 @@ class ApiSavings extends Controller
         }
         $this->api->respond([
             'transactions' => $transactions,
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $has_more
+            ],
             'balance' => $balance,
             'balance_breakdown' => $balance_breakdown,
             'member_balances' => $member_balances,

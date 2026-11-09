@@ -34,20 +34,60 @@ class ApiAuth extends Controller
             $this->api->respond(['message' => 'Invalid phone number/email or password.'], 401);
         }
 
+        $this->require_refresh_token_schema();
+        $tokens = $this->api->issue_tokens([
+            'id' => (int) $user['id'],
+            'role' => $user['role']
+        ]);
         $this->api->respond([
             'message' => 'Signed in successfully.',
-            'access_token' => $this->api->encode_jwt([
-                'sub' => (int) $user['id'],
-                'role' => $user['role']
-            ]),
-            'token_type' => 'Bearer',
-            'expires_in' => (int) config_item('payload_token_expiration'),
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
+            'token_type' => $tokens['token_type'],
+            'expires_in' => $tokens['expires_in'],
             'user' => [
                 'id' => (int) $user['id'],
                 'full_name' => $user['full_name'],
                 'role' => $user['role']
             ]
         ]);
+    }
+
+    public function refresh()
+    {
+        $this->api->require_method('POST');
+        $data = $this->api->body();
+        $refresh_token = trim((string) ($data['refresh_token'] ?? ''));
+        $claims = $this->api->validate_jwt($refresh_token);
+        if (!$claims || ($claims['type'] ?? '') !== 'refresh' || !isset($claims['sub'])) {
+            $this->api->respond_error('Your session has expired. Sign in again.', 401);
+        }
+        $this->api->rate_limit('token-refresh:' . (int) $claims['sub'], 30, 300);
+        $this->require_refresh_token_schema();
+
+        $user = $this->User_model->find_identity((int) $claims['sub']);
+        if (!$user || $user['status'] !== 'active'
+            || !in_array($user['role'], ['admin', 'officer', 'member'], true)) {
+            $this->api->revoke_refresh_token($refresh_token);
+            $this->api->respond_error('Your account is unavailable. Sign in again.', 401);
+        }
+
+        $this->api->refresh_access_token($refresh_token, [
+            'id' => (int) $user['id'],
+            'role' => $user['role']
+        ]);
+    }
+
+    public function logout()
+    {
+        $this->api->require_method('POST');
+        $data = $this->api->body();
+        $refresh_token = trim((string) ($data['refresh_token'] ?? ''));
+        $claims = $this->api->validate_jwt($refresh_token);
+        if ($claims && ($claims['type'] ?? '') === 'refresh') {
+            $this->api->revoke_refresh_token($refresh_token);
+        }
+        $this->api->respond(['message' => 'Signed out.']);
     }
 
     public function register()
@@ -287,6 +327,22 @@ class ApiAuth extends Controller
             error_log('CoopWise password reset schema is missing; apply database/coopwise_xendit_email_upgrade.sql.');
             $this->api->respond_error(
                 'Password reset is not configured in the database yet. Apply database/coopwise_xendit_email_upgrade.sql, then retry.',
+                503
+            );
+        }
+
+    }
+
+    private function require_refresh_token_schema()
+    {
+        $exists = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'refresh_tokens'"
+        )->fetchColumn();
+        if ((int) $exists !== 1) {
+            error_log('CoopWise refresh-token table is missing; apply database/coopwise_runtime_upgrade.sql.');
+            $this->api->respond_error(
+                'Session renewal is not configured in the database yet. Apply database/coopwise_runtime_upgrade.sql, then retry.',
                 503
             );
         }

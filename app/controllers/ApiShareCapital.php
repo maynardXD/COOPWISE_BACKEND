@@ -46,18 +46,26 @@ class ApiShareCapital extends Controller
             $params
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        $pagination = $this->api->pagination_params();
         $transactions = $this->db->raw(
             "SELECT t.id, t.member_id, t.subscription_id, t.transaction_type, t.amount,
                     t.balance_after, t.transaction_reference, t.payment_method,
                     t.reverses_transaction_id, t.description, t.created_at,
+                   EXISTS(SELECT 1 FROM share_capital_transactions r
+                          WHERE r.reverses_transaction_id = t.id) AS is_reversed,
                     s.subscription_number, m.member_number, m.first_name, m.last_name
              FROM share_capital_transactions t
              INNER JOIN share_capital_subscriptions s ON s.id = t.subscription_id
              INNER JOIN members m ON m.id = t.member_id
              " . ($member ? 'WHERE t.member_id = ?' : '') . "
-             ORDER BY t.created_at DESC, t.id DESC",
+             ORDER BY t.created_at DESC, t.id DESC
+             LIMIT " . (int) ($pagination['per_page'] + 1) . ' OFFSET ' . (int) $pagination['offset'],
             $params
         )->fetchAll(PDO::FETCH_ASSOC);
+        $has_more = count($transactions) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($transactions);
+        }
 
         $subscribed_cents = 0;
         $paid_up_cents = 0;
@@ -88,6 +96,11 @@ class ApiShareCapital extends Controller
         $this->api->respond([
             'subscriptions' => $subscriptions,
             'transactions' => $transactions,
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $has_more
+            ],
             'members' => $members,
             'summary' => [
                 'subscribed_amount' => self::format_cents($subscribed_cents),

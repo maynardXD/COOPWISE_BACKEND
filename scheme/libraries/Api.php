@@ -521,8 +521,10 @@ class Api
 
         $refresh_payload = [
             'sub'  => $user_id,
+            'role' => $user_data['role'] ?? 'user',
             'type' => 'refresh',
             'jti'  => bin2hex(random_bytes(16)),
+            'exp'  => $now + $this->refresh_token_expiration,
         ];
 
         $access_token  = $this->encode_jwt($access_payload);
@@ -555,7 +557,7 @@ class Api
      * @param string $refresh_token
      * @return void
      */
-    public function refresh_access_token($refresh_token)
+    public function refresh_access_token($refresh_token, $user_data = [])
     {
         $payload = $this->validate_jwt($refresh_token);
         if (!$payload || ($payload['type'] ?? '') !== 'refresh') {
@@ -578,7 +580,10 @@ class Api
         // Revoke old + rotate (best practice)
         $this->revoke_refresh_token($refresh_token);
 
-        $new_tokens = $this->issue_tokens(['id' => $payload['sub']]);
+        $new_tokens = $this->issue_tokens([
+            'id' => $payload['sub'],
+            'role' => $user_data['role'] ?? ($payload['role'] ?? 'user')
+        ]);
 
         $this->respond([
             'message' => 'Tokens refreshed successfully',
@@ -618,6 +623,21 @@ class Api
         }
 
         $this->_lava->db->raw($sql, $params);
+    }
+
+    public function pagination_params($default_limit = 50, $max_limit = 100, $page_parameter = 'page', $limit_parameter = 'per_page')
+    {
+        $page = filter_var($_GET[$page_parameter] ?? null, FILTER_VALIDATE_INT);
+        $limit = filter_var($_GET[$limit_parameter] ?? null, FILTER_VALIDATE_INT);
+        $page = $page !== false && $page !== null ? max(1, $page) : 1;
+        $limit = $limit !== false && $limit !== null ? $limit : $default_limit;
+        $limit = min($max_limit, max(1, $limit));
+
+        return [
+            'page' => $page,
+            'per_page' => $limit,
+            'offset' => ($page - 1) * $limit
+        ];
     }
 
 

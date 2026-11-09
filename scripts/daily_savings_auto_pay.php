@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/lib/financial_workflows.php';
+
 $database = [
     'host' => getenv('DB_HOST') ?: '127.0.0.1',
     'port' => getenv('DB_PORT') ?: '3306',
@@ -27,7 +29,13 @@ if ($database['ssl_ca'] !== '' && defined('PDO::MYSQL_ATTR_SSL_CA')) {
 
 $db = new PDO($dsn, $database['user'], $database['password'], $options);
 $today = date('Y-m-d');
+$runId = bin2hex(random_bytes(16));
+$startedAt = date('Y-m-d H:i:s');
+$db->prepare(
+    "INSERT INTO auto_pay_runs (run_id, status, started_at) VALUES (?, 'running', ?)"
+)->execute([$runId, $startedAt]);
 $processed = [
+    'members_checked' => 0,
     'loan_installments' => 0,
     'paluwagan_contributions' => 0,
     'partial_loan_installments' => 0,
@@ -35,16 +43,26 @@ $processed = [
     'skipped_paluwagan_contributions' => 0,
     'errors' => 0
 ];
-$members = $db->query(
-    "SELECT id, loan_autopay_enabled, paluwagan_autopay_enabled
-     FROM members
-     WHERE status = 'active'
-       AND (loan_autopay_enabled = 1 OR paluwagan_autopay_enabled = 1)
-     ORDER BY id ASC"
-)->fetchAll();
+try {
+    $members = $db->query(
+        "SELECT id, loan_autopay_enabled, paluwagan_autopay_enabled
+         FROM members
+         WHERE status = 'active'
+           AND (loan_autopay_enabled = 1 OR paluwagan_autopay_enabled = 1)
+         ORDER BY id ASC"
+    )->fetchAll();
+} catch (Throwable $error) {
+    $details = json_encode(['error' => 'member_selection_failed'], JSON_UNESCAPED_SLASHES);
+    $db->prepare(
+        "UPDATE auto_pay_runs SET status = 'failed', completed_at = ?, error_count = 1, details = ? WHERE run_id = ?"
+    )->execute([date('Y-m-d H:i:s'), $details, $runId]);
+    error_log('CoopWise daily savings auto-pay could not select members; run=' . $runId . ': ' . $error->getMessage());
+    exit(1);
+}
 
 foreach ($members as $member) {
     $memberId = (int) $member['id'];
+    $processed['members_checked']++;
     $db->beginTransaction();
     try {
         $memberLock = $db->prepare(
@@ -95,7 +113,7 @@ foreach ($members as $member) {
                     continue;
                 }
 
-                $payment = min($balance, $remainingDue, $loanTotals[$loanId]['balance']);
+                $payment = autoPayLoanAmount($balance, $remainingDue, $loanTotals[$loanId]['balance']);
                 if ($payment < 1) {
                     continue;
                 }
@@ -124,7 +142,7 @@ foreach ($members as $member) {
                     (int) $schedule['loan_id'],
                     $memberId,
                     formatCents($payment),
-                    'bank',
+                    'savings',
                     $reference
                 ]);
 
@@ -212,6 +230,31 @@ foreach ($members as $member) {
     }
 }
 
+try {
+    $db->prepare(
+        'UPDATE auto_pay_runs SET status = ?, completed_at = ?, members_checked = ?,
+            loan_installments = ?, paluwagan_contributions = ?, partial_loan_installments = ?,
+            skipped_loan_installments = ?, skipped_paluwagan_contributions = ?, error_count = ?, details = ?
+         WHERE run_id = ?'
+    )->execute([
+        $processed['errors'] > 0 ? 'failed' : 'completed',
+        date('Y-m-d H:i:s'),
+        $processed['members_checked'],
+        $processed['loan_installments'],
+        $processed['paluwagan_contributions'],
+        $processed['partial_loan_installments'],
+        $processed['skipped_loan_installments'],
+        $processed['skipped_paluwagan_contributions'],
+        $processed['errors'],
+        json_encode($processed, JSON_UNESCAPED_SLASHES),
+        $runId
+    ]);
+} catch (Throwable $error) {
+    error_log('CoopWise daily savings auto-pay run summary could not be saved; run=' . $runId . ': ' . $error->getMessage());
+    exit(1);
+}
+$processed['run_id'] = $runId;
+$processed['status'] = $processed['errors'] > 0 ? 'failed' : 'completed';
 echo json_encode($processed, JSON_UNESCAPED_SLASHES) . PHP_EOL;
 if ($processed['errors'] > 0) {
     exit(1);
@@ -277,18 +320,4 @@ function savingsBalance(PDO $db, int $memberId): int
     );
     $query->execute([$memberId]);
     return moneyToCents((string) $query->fetchColumn());
-}
-
-function moneyToCents(string $amount): int
-{
-    if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
-        throw new InvalidArgumentException('A stored financial amount is invalid.');
-    }
-    [$whole, $fraction] = array_pad(explode('.', $amount, 2), 2, '');
-    return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
-}
-
-function formatCents(int $amount): string
-{
-    return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
 }

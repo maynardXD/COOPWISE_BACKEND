@@ -84,7 +84,28 @@ class ApiLoans extends Controller
         if ($member) {
             $query->where('l.member_id', (int) $member['id']);
         }
-        $this->api->respond(['loans' => $query->order_by('l.created_at', 'DESC')->get_all()]);
+        $pending_query = $this->db->table('loans')->where('status', 'pending');
+        if ($member) {
+            $pending_query->where('member_id', (int) $member['id']);
+        }
+        $pending_count = $pending_query->count();
+        $pagination = $this->api->pagination_params();
+        $loans = $query->order_by('l.created_at', 'DESC')
+            ->limit($pagination['offset'], $pagination['per_page'] + 1)
+            ->get_all();
+        $has_more = count($loans) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($loans);
+        }
+        $this->api->respond([
+            'loans' => $loans,
+            'pending_count' => $pending_count,
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $has_more
+            ]
+        ]);
     }
 
     public function apply()
@@ -416,7 +437,22 @@ class ApiLoans extends Controller
         if ($member) {
             $query->where('lp.member_id', (int) $member['id']);
         }
-        $this->api->respond(['payments' => $query->order_by('lp.payment_date', 'DESC')->get_all()]);
+        $pagination = $this->api->pagination_params();
+        $payments = $query->order_by('lp.payment_date', 'DESC')->order_by('lp.id', 'DESC')
+            ->limit($pagination['offset'], $pagination['per_page'] + 1)
+            ->get_all();
+        $has_more = count($payments) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($payments);
+        }
+        $this->api->respond([
+            'payments' => $payments,
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $has_more
+            ]
+        ]);
     }
 
     private function authenticated_user()

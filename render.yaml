@@ -3,7 +3,7 @@ services:
     name: coopwise-backend
     runtime: docker
     plan: free
-    healthCheckPath: /api/health
+    healthCheckPath: /api/health/ready
     envVars:
       - key: APP_ENV
         value: production
