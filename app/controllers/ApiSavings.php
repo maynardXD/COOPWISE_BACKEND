@@ -335,6 +335,97 @@ class ApiSavings extends Controller
         ]);
     }
 
+    public function email_ledger_pdf()
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if ($user['role'] !== 'member') {
+            $this->api->respond_error('Only members can email their own savings ledger.', 403);
+        }
+        $this->api->rate_limit('savings-ledger-email:' . (int) $user['id'], 3, 3600);
+        $this->member_profile($user);
+
+        $email = strtolower(trim((string) ($user['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $this->api->respond_error('Your account does not have a valid registered email address. Contact cooperative staff to update it.', 409);
+        }
+        $sender_email = strtolower(trim((string) getenv('BREVO_SENDER_EMAIL')));
+        $sender_name = trim((string) (getenv('BREVO_SENDER_NAME') ?: 'CoopWise'));
+        $api_key = trim((string) getenv('BREVO_API_KEY'));
+        if ($api_key === '' || !filter_var($sender_email, FILTER_VALIDATE_EMAIL)) {
+            $this->api->respond_error('Ledger email is not configured. Contact cooperative staff.', 503);
+        }
+
+        $data = $this->api->body();
+        $pdf_base64 = $data['pdf_base64'] ?? null;
+        if (!is_string($pdf_base64) || $pdf_base64 === '' || strlen($pdf_base64) > 4 * 1024 * 1024) {
+            $this->api->respond_error('The ledger PDF is invalid or too large to email. Try a shorter date range.', 422);
+        }
+        $pdf = base64_decode($pdf_base64, true);
+        if ($pdf === false || strlen($pdf) > 3 * 1024 * 1024
+            || strpos($pdf, '%PDF-') !== 0 || strpos(substr($pdf, -1024), '%%EOF') === false) {
+            $this->api->respond_error('A valid PDF ledger attachment is required.', 422);
+        }
+
+        $payload = json_encode([
+            'sender' => ['name' => $sender_name, 'email' => $sender_email],
+            'to' => [['email' => $email, 'name' => (string) $user['full_name']]],
+            'subject' => 'Your CoopWise savings ledger',
+            'textContent' => 'Your requested CoopWise savings ledger is attached as a PDF. This statement reflects the records for your selected period.',
+            'attachment' => [[
+                'name' => 'CoopWise-Savings-Ledger.pdf',
+                'content' => $pdf_base64
+            ]]
+        ], JSON_UNESCAPED_SLASHES);
+        if ($payload === false) {
+            throw new RuntimeException('The savings ledger email could not be encoded.');
+        }
+
+        $context = stream_context_create(['http' => [
+            'method' => 'POST',
+            'header' => "api-key: " . $api_key . "\r\nAccept: application/json\r\nContent-Type: application/json",
+            'content' => $payload,
+            'timeout' => 20,
+            'ignore_errors' => true
+        ], 'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true
+        ]]);
+        $response = @file_get_contents('https://api.brevo.com/v3/smtp/email', false, $context);
+        $status_line = $http_response_header[0] ?? '';
+        preg_match('/\s(\d{3})\s/', $status_line, $matches);
+        $status = (int) ($matches[1] ?? 0);
+        if (!is_string($response) || $status < 200 || $status >= 300) {
+            $details = is_string($response) ? json_decode($response, true) : null;
+            $provider_code = is_array($details) ? (string) ($details['code'] ?? '') : '';
+            $provider_message = is_array($details) ? (string) ($details['message'] ?? '') : '';
+            $provider_message = trim(preg_replace('/\s+/', ' ', strip_tags($provider_message)));
+            if ($provider_message !== '') {
+                $provider_message = str_ireplace([$email, $sender_email, $api_key], '[redacted]', $provider_message);
+                $provider_message = substr($provider_message, 0, 300);
+            }
+            if ($status === 0) {
+                $transport_error = error_get_last();
+                $provider_message = $transport_error['message'] ?? 'No HTTP response was received from Brevo.';
+                $provider_message = substr(trim(preg_replace('/\s+/', ' ', strip_tags($provider_message))), 0, 300);
+            }
+            $support_reference = bin2hex(random_bytes(6));
+            error_log(
+                'CoopWise savings ledger email failed; reference=' . $support_reference
+                . '; user_id=' . (int) $user['id'] . '; provider_error=Brevo HTTP '
+                . ($status ?: 'unknown')
+                . ($provider_code !== '' ? ' (' . substr($provider_code, 0, 80) . ')' : '')
+                . ($provider_message !== '' ? ': ' . $provider_message : '')
+            );
+            $this->api->respond_error(
+                'The ledger email provider did not accept the message. Try again later. Support reference: ' . $support_reference . '.',
+                502
+            );
+        }
+
+        $this->api->respond(['message' => 'Brevo accepted the ledger PDF for delivery to your registered account email.']);
+    }
+
     private function member_balance(int $member_id)
     {
         $deposits = $this->db->table('savings_transactions')

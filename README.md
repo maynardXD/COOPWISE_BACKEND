@@ -123,6 +123,11 @@ constraint. Make a database backup before applying it.
   selected period with opening/closing balances and transaction totals;
   `/api/savings/ledger/{member_id}` is staff-only. Both accept inclusive
   `from` and `to` dates in `YYYY-MM-DD` format. No schema migration is required.
+  Members can POST a generated PDF to `/api/savings/ledger/email`; the backend
+  sends it only to the authenticated member account's registered email and
+  accepts no recipient address from the request. The endpoint validates the
+  PDF attachment, limits it to 3 MB, and allows three sends per account per
+  hour. It uses the configured Brevo sender/API key and requires no new table.
 - Loan approval credits the approved principal to the member's available balance
   within the same database transaction that creates the amortization schedule.
   The withdrawal endpoint writes a withdrawal ledger entry in a locked
