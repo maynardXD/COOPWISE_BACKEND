@@ -216,6 +216,29 @@ production database.
   network address instead. A Gmail sender can be verified but its domain
   cannot be authenticated in Brevo, which warns that free-email domains can
   have reduced deliverability.
+- Optional Cloudflare Turnstile checks can protect sign-in, member registration,
+  Google sign-in, and both password-reset steps. Configure both
+  `COOPWISE_TURNSTILE_SITE_KEY` and `COOPWISE_TURNSTILE_SECRET_KEY` to enable
+  it; the backend verifies the one-use token, expected action, and returned
+  hostname with Cloudflare before continuing. If only one key is set, protected
+  requests fail closed with a configuration error. Set
+  `COOPWISE_TURNSTILE_HOSTNAMES` to the exact comma-separated frontend hostnames
+  configured for the Turnstile widget. Leave both keys empty to disable the
+  optional check in local development.
+- Optional Google sign-in uses `GOOGLE_OAUTH_CLIENT_ID` and Google Identity
+  Services. The backend verifies the ID-token signature against Google's
+  rotating public keys and checks its issuer, audience, expiration, and verified
+  email. It signs in only an existing active member account whose registered
+  email matches; it does not create accounts or allow Google sign-in for staff.
+  Add the local and deployed frontend origins to the Google OAuth web client's
+  Authorized JavaScript origins. Keep the client ID in the backend environment;
+  it is returned by the public auth configuration endpoint for the browser
+  button. No database migration or downloaded SDK is required.
+- Staff Reports uses Google Charts to visualize monthly financial activity and
+  loan status totals. Charts contain cooperative-wide aggregates and do not send
+  member names or account-level data to the chart UI. The library loads from
+  Google's hosted Charts loader when staff open Reports; without network access,
+  the rest of the report tables remain available.
 - Staff may enroll multiple selected members in a Paluwagan cycle; the backend
   randomizes their payout order. Xendit collects contributions only; it does
   not send the pooled Paluwagan payout. Staff confirmation adds the payout to
@@ -301,6 +324,18 @@ the separate frontend.
    `BREVO_SENDER_EMAIL` to enable password-reset email. Do not put secret keys
    in Vercel or frontend environment variables.
 4. Configure `/api/health` as Render's health-check path.
+
+To enable Turnstile, create a Cloudflare Turnstile widget for the exact frontend
+hostnames and set both `COOPWISE_TURNSTILE_SITE_KEY` and
+`COOPWISE_TURNSTILE_SECRET_KEY` in Render. Set
+`COOPWISE_TURNSTILE_HOSTNAMES` to the same comma-separated hostnames. The site
+key is public; keep the secret only in Render. To enable Google member sign-in,
+create a Google OAuth client with type **Web application**, register the
+localhost development origin and deployed Vercel origin as Authorized
+JavaScript origins, then set its client ID as `GOOGLE_OAUTH_CLIENT_ID` in
+Render. Google sign-in only works for an existing active member account whose
+registered email is verified by Google. Google Charts needs no account or API
+key; it loads from Google's Charts loader when the staff Reports page opens.
 
 In Xendit's Dashboard, configure the Payment Sessions webhook at
 `https://YOUR-RENDER-SERVICE.onrender.com/api/checkout-transactions/webhook`
