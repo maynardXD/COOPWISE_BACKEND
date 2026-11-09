@@ -77,6 +77,12 @@ class ApiLoans extends Controller
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
+        $pending_query = $this->db->table('loans')->where('status', 'pending');
+        if ($member) {
+            $pending_query->where('member_id', (int) $member['id']);
+        }
+        $pending_count = $pending_query->count();
+
         $query = $this->db->table('loans l')
             ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
@@ -84,11 +90,6 @@ class ApiLoans extends Controller
         if ($member) {
             $query->where('l.member_id', (int) $member['id']);
         }
-        $pending_query = $this->db->table('loans')->where('status', 'pending');
-        if ($member) {
-            $pending_query->where('member_id', (int) $member['id']);
-        }
-        $pending_count = $pending_query->count();
         $pagination = $this->api->pagination_params();
         $loans = $query->order_by('l.created_at', 'DESC')
             ->limit($pagination['offset'], $pagination['per_page'] + 1)

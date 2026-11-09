@@ -395,15 +395,53 @@ class ApiSavings extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
-        if ($user['role'] !== 'member') {
-            $this->api->respond_error('Only members can email their own savings ledger.', 403);
+        $data = $this->api->body();
+        $member_id = null;
+        if ($user['role'] === 'member') {
+            if (isset($data['member_id'])) {
+                $this->api->respond_error('Members may only email their own savings ledger.', 403);
+            }
+            $member = $this->member_profile($user);
+            $email = strtolower(trim((string) ($user['email'] ?? '')));
+            $recipient_name = (string) $user['full_name'];
+            $success_message = 'Brevo accepted the ledger PDF for delivery to your registered account email.';
+        } else {
+            $this->require_staff($user);
+            $member_id = filter_var($data['member_id'] ?? null, FILTER_VALIDATE_INT);
+            if (!$member_id || $member_id < 1) {
+                $this->api->respond_error('Choose a valid member for the savings ledger email.', 422);
+            }
+            $member = $this->db->table('members')
+                ->where('id', (int) $member_id)
+                ->where('status', 'active')
+                ->get();
+            if (!$member) {
+                $this->api->respond_error('Active member not found.', 404);
+            }
+            $recipient = $this->db->table('users u')
+                ->select('u.email, u.full_name')
+                ->inner_join('members m', 'm.user_id = u.id')
+                ->where('m.id', (int) $member_id)
+                ->where('m.status', 'active')
+                ->where('u.status', 'active')
+                ->where('u.role', 'member')
+                ->get();
+            if (!$recipient) {
+                $this->api->respond_error('This member does not have an active registered account.', 409);
+            }
+            $email = strtolower(trim((string) ($recipient['email'] ?? '')));
+            $recipient_name = (string) $recipient['full_name'];
+            $success_message = "Brevo accepted the ledger PDF for delivery to the member's registered account email.";
         }
         $this->api->rate_limit('savings-ledger-email:' . (int) $user['id'], 3, 3600);
-        $this->member_profile($user);
 
-        $email = strtolower(trim((string) ($user['email'] ?? '')));
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->api->respond_error('Your account does not have a valid registered email address. Contact cooperative staff to update it.', 409);
+            $this->api->respond_error(
+                $user['role'] === 'member'
+                    ? 'Your account does not have a valid registered email address. Contact cooperative staff to update it.'
+                    : 'This member does not have a valid registered email address. Update the account email before sending.',
+                409
+            );
         }
         $sender_email = strtolower(trim((string) getenv('BREVO_SENDER_EMAIL')));
         $sender_name = trim((string) (getenv('BREVO_SENDER_NAME') ?: 'CoopWise'));
@@ -412,7 +450,6 @@ class ApiSavings extends Controller
             $this->api->respond_error('Ledger email is not configured. Contact cooperative staff.', 503);
         }
 
-        $data = $this->api->body();
         $pdf_base64 = $data['pdf_base64'] ?? null;
         if (!is_string($pdf_base64) || $pdf_base64 === '' || strlen($pdf_base64) > 4 * 1024 * 1024) {
             $this->api->respond_error('The ledger PDF is invalid or too large to email. Try a shorter date range.', 422);
@@ -425,9 +462,9 @@ class ApiSavings extends Controller
 
         $payload = json_encode([
             'sender' => ['name' => $sender_name, 'email' => $sender_email],
-            'to' => [['email' => $email, 'name' => (string) $user['full_name']]],
-            'subject' => 'Your CoopWise savings ledger',
-            'textContent' => 'Your requested CoopWise savings ledger is attached as a PDF. This statement reflects the records for your selected period.',
+            'to' => [['email' => $email, 'name' => $recipient_name]],
+            'subject' => 'CoopWise savings ledger',
+            'textContent' => 'The requested CoopWise savings ledger is attached as a PDF. This statement reflects the records for the selected period.',
             'attachment' => [[
                 'name' => 'CoopWise-Savings-Ledger.pdf',
                 'content' => $pdf_base64
@@ -468,7 +505,9 @@ class ApiSavings extends Controller
             $support_reference = bin2hex(random_bytes(6));
             error_log(
                 'CoopWise savings ledger email failed; reference=' . $support_reference
-                . '; user_id=' . (int) $user['id'] . '; provider_error=Brevo HTTP '
+                . '; requester_user_id=' . (int) $user['id']
+                . ($member_id !== null ? '; member_id=' . (int) $member_id : '')
+                . '; provider_error=Brevo HTTP '
                 . ($status ?: 'unknown')
                 . ($provider_code !== '' ? ' (' . substr($provider_code, 0, 80) . ')' : '')
                 . ($provider_message !== '' ? ': ' . $provider_message : '')
@@ -479,7 +518,7 @@ class ApiSavings extends Controller
             );
         }
 
-        $this->api->respond(['message' => 'Brevo accepted the ledger PDF for delivery to your registered account email.']);
+        $this->api->respond(['message' => $success_message]);
     }
 
     private function member_balance(int $member_id)
