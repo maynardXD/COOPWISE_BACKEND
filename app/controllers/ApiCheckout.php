@@ -29,10 +29,11 @@ class ApiCheckout extends Controller
             $this->require_staff($user);
         }
         $query = $this->db->table('payment_transactions p')
-            ->select('p.id, p.member_id, p.purpose, p.amount, p.currency, p.provider_fee, p.net_amount, p.reference_no,
+            ->select("p.id, p.member_id, p.purpose, p.amount, p.currency, p.provider_fee, p.net_amount, p.reference_no,
                       p.loan_id, p.cycle_id, p.subscription_id, p.status, p.checkout_url,
                       p.review_note, p.created_at, p.paid_at, p.applied_at,
-                      m.member_number, m.first_name, m.last_name')
+                      CASE WHEN p.reference_no LIKE 'CW-SAV-PAY-%' THEN 'savings' ELSE 'xendit' END AS payment_method,
+                      m.member_number, m.first_name, m.last_name")
             ->inner_join('members m', 'm.id = p.member_id');
         if ($member) {
             $query->where('p.member_id', (int) $member['id']);
@@ -50,6 +51,48 @@ class ApiCheckout extends Controller
         }
         $member = $this->member_profile($user);
         $this->require_payment_schema();
+        $data = $this->api->body();
+        $payment_method = trim((string) ($data['payment_method'] ?? 'xendit'));
+        $request_id = trim((string) ($data['request_id'] ?? ''));
+        $purpose = trim((string) ($data['purpose'] ?? ''));
+        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
+        $loan_id = filter_var($data['loan_id'] ?? null, FILTER_VALIDATE_INT);
+        $cycle_id = filter_var($data['cycle_id'] ?? null, FILTER_VALIDATE_INT);
+        $subscription_id = filter_var($data['subscription_id'] ?? null, FILTER_VALIDATE_INT);
+
+        if (!in_array($payment_method, ['xendit', 'savings'], true)
+            || !in_array($purpose, ['loan', 'paluwagan', 'share_capital'], true)
+            || $amount === false || $amount < 100 || $amount > 100000000) {
+            $this->api->respond_error('Choose a supported payment method, purpose, and amount from PHP 1.00 to PHP 1,000,000.00.', 422);
+        }
+        if (($purpose === 'loan' && (!$loan_id || $cycle_id || $subscription_id))
+            || ($purpose === 'paluwagan' && (!$cycle_id || $loan_id || $subscription_id))
+            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))) {
+            $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
+        }
+        if ($payment_method === 'savings' && !preg_match(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
+            $request_id
+        )) {
+            $this->api->respond_error('A valid savings payment request identifier is required.', 422);
+        }
+
+        $business_date = $purpose === 'paluwagan' ? date('Y-m-d') : null;
+        if ($payment_method === 'savings') {
+            $this->create_savings_payment(
+                $user,
+                $member,
+                $purpose,
+                $amount,
+                $loan_id ?: null,
+                $cycle_id ?: null,
+                $subscription_id ?: null,
+                $business_date,
+                $request_id
+            );
+            return;
+        }
+
         $this->require_xendit_config();
         $frontend_url = rtrim((string) getenv('COOPWISE_FRONTEND_URL'), '/');
         $frontend_scheme = strtolower((string) parse_url($frontend_url, PHP_URL_SCHEME));
@@ -60,26 +103,8 @@ class ApiCheckout extends Controller
                 503
             );
         }
-        $data = $this->api->body();
-        $purpose = trim((string) ($data['purpose'] ?? ''));
-        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
-        $loan_id = filter_var($data['loan_id'] ?? null, FILTER_VALIDATE_INT);
-        $cycle_id = filter_var($data['cycle_id'] ?? null, FILTER_VALIDATE_INT);
-        $subscription_id = filter_var($data['subscription_id'] ?? null, FILTER_VALIDATE_INT);
-
-        if (!in_array($purpose, ['loan', 'paluwagan', 'share_capital'], true)
-            || $amount === false || $amount < 100 || $amount > 100000000) {
-            $this->api->respond_error('Choose a payment purpose and an amount from PHP 1.00 to PHP 1,000,000.00.', 422);
-        }
-        if (($purpose === 'loan' && (!$loan_id || $cycle_id || $subscription_id))
-            || ($purpose === 'paluwagan' && (!$cycle_id || $loan_id || $subscription_id))
-            || ($purpose === 'share_capital' && (!$subscription_id || $loan_id || $cycle_id))) {
-            $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
-        }
-
         $reference = 'CW-PAY-' . strtoupper(bin2hex(random_bytes(6)));
         $transaction_id = null;
-        $business_date = $purpose === 'paluwagan' ? date('Y-m-d') : null;
         $this->db->transaction();
         try {
             $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
@@ -168,6 +193,166 @@ class ApiCheckout extends Controller
             'transaction_id' => (int) $transaction_id,
             'checkout_url' => $checkout_url
         ], 201);
+    }
+
+    private function create_savings_payment(
+        array $user,
+        array $member,
+        string $purpose,
+        int $amount,
+        ?int $loan_id,
+        ?int $cycle_id,
+        ?int $subscription_id,
+        ?string $business_date,
+        string $request_id
+    ) {
+        $member_id = (int) $member['id'];
+        $reference = 'CW-SAV-PAY-' . $member_id . '-' . strtoupper(str_replace('-', '', $request_id));
+        $already_completed = false;
+        $balance_after = 0;
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [$member_id])->fetch();
+            $existing = $this->db->raw(
+                'SELECT id, member_id, purpose, amount, loan_id, cycle_id, subscription_id, business_date, status, applied_at
+                 FROM payment_transactions WHERE reference_no = ? FOR UPDATE',
+                [$reference]
+            )->fetch(PDO::FETCH_ASSOC);
+            if ($existing) {
+                if ((int) $existing['member_id'] !== $member_id
+                    || $existing['purpose'] !== $purpose
+                    || self::money_to_cents((string) $existing['amount']) !== $amount
+                    || (int) ($existing['loan_id'] ?? 0) !== (int) ($loan_id ?? 0)
+                    || (int) ($existing['cycle_id'] ?? 0) !== (int) ($cycle_id ?? 0)
+                    || (int) ($existing['subscription_id'] ?? 0) !== (int) ($subscription_id ?? 0)
+                    || ($existing['business_date'] ?? null) !== $business_date) {
+                    throw new DomainException('This payment request identifier was already used for a different payment.');
+                }
+                if ($existing['status'] !== 'paid' || $existing['applied_at'] === null) {
+                    throw new DomainException('This payment request is not complete. Please contact cooperative staff before retrying.');
+                }
+                $transaction_id = (int) $existing['id'];
+                $balance = $this->member_balance($member_id);
+                if ($balance === false) {
+                    throw new RuntimeException('The member savings balance could not be calculated.');
+                }
+                $balance_after = $balance;
+                $already_completed = true;
+            } else {
+                if ($purpose === 'loan') {
+                    $this->reserve_loan_amount((int) $loan_id, $member_id, $amount);
+                } elseif ($purpose === 'paluwagan') {
+                    $this->reserve_paluwagan_contribution((int) $cycle_id, $member_id, $amount, (string) $business_date);
+                } else {
+                    $this->reserve_share_capital_amount((int) $subscription_id, $member_id, $amount);
+                }
+
+                $balance = $this->member_balance($member_id);
+                if ($balance === false) {
+                    throw new RuntimeException('The member savings balance could not be calculated.');
+                }
+                if ($amount > $balance) {
+                    throw new DomainException('The payment amount exceeds your available savings balance.');
+                }
+
+                $transaction_id = $this->db->table('payment_transactions')->insert([
+                    'member_id' => $member_id,
+                    'purpose' => $purpose,
+                    'amount' => self::format_cents($amount),
+                    'currency' => 'PHP',
+                    'reference_no' => $reference,
+                    'loan_id' => $loan_id,
+                    'cycle_id' => $cycle_id,
+                    'subscription_id' => $subscription_id,
+                    'business_date' => $business_date,
+                    'status' => 'pending'
+                ]);
+                if (!$transaction_id) {
+                    throw new RuntimeException('The savings-funded payment record could not be created.');
+                }
+
+                $balance_after = $balance - $amount;
+                $savings_transaction_id = $this->db->table('savings_transactions')->insert([
+                    'member_id' => $member_id,
+                    'type' => 'withdrawal',
+                    'amount' => self::format_cents($amount),
+                    'balance_after' => self::format_cents($balance_after),
+                    'reference_no' => $reference,
+                    'description' => 'Payment from savings for ' . str_replace('_', ' ', $purpose),
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$savings_transaction_id) {
+                    throw new RuntimeException('The savings debit could not be recorded.');
+                }
+
+                $payment = [
+                    'id' => (int) $transaction_id,
+                    'member_id' => $member_id,
+                    'purpose' => $purpose,
+                    'amount' => self::format_cents($amount),
+                    'reference_no' => $reference,
+                    'loan_id' => $loan_id,
+                    'cycle_id' => $cycle_id,
+                    'subscription_id' => $subscription_id,
+                    'business_date' => $business_date,
+                    'payment_method' => 'savings',
+                    'paid_by_user_id' => (int) $user['id']
+                ];
+                if ($purpose === 'loan') {
+                    $this->apply_loan_payment($payment);
+                } elseif ($purpose === 'paluwagan') {
+                    $this->apply_paluwagan_payment($payment);
+                } else {
+                    $this->apply_share_capital_payment($payment);
+                }
+
+                $updated = $this->db->table('payment_transactions')
+                    ->where('id', (int) $transaction_id)
+                    ->where('status', 'pending')
+                    ->update([
+                        'status' => 'paid',
+                        'paid_at' => date('Y-m-d H:i:s'),
+                        'applied_at' => date('Y-m-d H:i:s')
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('The savings-funded payment status could not be confirmed.');
+                }
+                $this->write_activity_log((int) $user['id'], 'payments', 'savings_payment_confirmed', [
+                    'transaction_id' => (int) $transaction_id,
+                    'purpose' => $purpose,
+                    'amount' => self::format_cents($amount),
+                    'reference_no' => $reference,
+                    'balance_after' => self::format_cents($balance_after)
+                ]);
+            }
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise savings payment failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => $already_completed
+                ? 'This savings-funded payment was already completed; your balance was not deducted again.'
+                : 'Payment confirmed and deducted from your savings.',
+            'transaction_id' => (int) $transaction_id,
+            'payment_method' => 'savings',
+            'balance' => self::format_cents($balance_after)
+        ], 201);
+    }
+
+    private function member_balance(int $member_id)
+    {
+        $result = $this->db->raw(
+            "SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END), 0) AS balance
+             FROM savings_transactions WHERE member_id = ?",
+            [$member_id]
+        )->fetch(PDO::FETCH_ASSOC);
+        return $result ? self::money_to_cents((string) $result['balance']) : false;
     }
 
     public function sync($transaction_id = null)
@@ -513,9 +698,9 @@ class ApiCheckout extends Controller
         $inserted = $this->db->table('loan_payments')->insert([
             'loan_id' => (int) $loan['id'],
             'member_id' => (int) $payment['member_id'],
-            'paid_by_user_id' => null,
+            'paid_by_user_id' => $payment['paid_by_user_id'] ?? null,
             'amount_paid' => $payment['amount'],
-            'payment_method' => 'xendit',
+            'payment_method' => $payment['payment_method'] ?? 'xendit',
             'reference_no' => $payment['reference_no'],
             'payment_date' => date('Y-m-d H:i:s')
         ]);
@@ -581,7 +766,7 @@ class ApiCheckout extends Controller
             'contribution_date' => $date,
             'amount' => $payment['amount'],
             'reference_no' => $payment['reference_no'],
-            'recorded_by_user_id' => null
+            'recorded_by_user_id' => $payment['paid_by_user_id'] ?? null
         ]);
         if (!$inserted) {
             throw new RuntimeException('The confirmed Paluwagan contribution could not be recorded.');
@@ -654,8 +839,8 @@ class ApiCheckout extends Controller
             'amount' => $payment['amount'],
             'balance_after' => self::format_cents($balance_after),
             'transaction_reference' => $payment['reference_no'],
-            'payment_method' => 'xendit',
-            'created_by_user_id' => null
+            'payment_method' => $payment['payment_method'] ?? 'xendit',
+            'created_by_user_id' => $payment['paid_by_user_id'] ?? null
         ]);
         if (!$inserted) {
             throw new RuntimeException('The confirmed share-capital contribution could not be recorded.');

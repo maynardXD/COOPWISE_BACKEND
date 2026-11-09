@@ -37,6 +37,8 @@ reuse its branding, images, or website copy.
    payment ledger, webhook idempotency records, password-reset OTP storage,
    and Xendit payment-method values. This migration depends on the loan,
    cooperative-cycle, and share-capital tables from the earlier upgrades.
+   Run `database/coopwise_savings_payment_upgrade.sql` to enable savings-funded
+   repayments and share-capital contributions in existing databases.
    On an existing database, run `database/coopwise_member_balance_upgrade.sql`
    to credit previously paid Paluwagan payouts to available demo balances, and
    `database/coopwise_retire_savings_withdrawals_upgrade.sql` to refund any
@@ -96,8 +98,10 @@ constraint. Make a database backup before applying it.
   No tax or additional fee is added. The rate is a local demo setting, not a
   published CARD Bank rate. Members can preview the estimated schedule before
   applying and print/save their final approved schedule as PDF. Members can
-  pay through Xendit checkout; loan balances update only after provider
-  confirmation.
+  pay through Xendit checkout or deduct the payment from available savings.
+  Xendit payments update after provider confirmation; savings-funded payments
+  debit the member balance and apply the payment together in one database
+  transaction.
 - Staff create a daily cooperative cycle, set the contribution amount, enroll
   multiple selected members with a randomized payout order, and activate it.
   Each enrolled member contributes once per day through Xendit checkout.
@@ -203,10 +207,10 @@ constraint. Make a database backup before applying it.
   application audit events; member meetings and voting are not included.
 - Share capital is tracked separately from savings. Staff create subscriptions
   using cooperative-approved share counts and par values. Members can pay the
-  unpaid amount through Xendit checkout. Corrections are retained as linked
-  reversal records instead of deleting the original transaction. Staff and
-  members can view subscribed, paid-up, and unpaid amounts; members can only
-  access their own records.
+  unpaid amount through Xendit checkout or deduct it from their savings
+  balance. Corrections are retained as linked reversal records instead of
+  deleting the original transaction. Staff and members can view subscribed,
+  paid-up, and unpaid amounts; members can only access their own records.
 
 This project is a school/demo application, not a live banking service. Xendit
 should remain in test mode for the school demo; a test payment does not move
