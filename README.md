@@ -43,7 +43,8 @@ reuse its branding, images, or website copy.
    old pending withdrawal simulations. These one-time migrations preserve the
    underlying transaction and request history.
    Run `database/coopwise_policies_upgrade.sql` to add editable sample
-   cooperative policies for the Learning Center.
+   cooperative policies for the Learning Center. It creates only the missing
+   table and inserts its default row only if that row is absent.
    The React frontend's Share Capital, Reports, Payments, and password-reset
    features require the corresponding tables. For a new database, the base
    schema already creates the tables and payment-method values.
@@ -165,6 +166,18 @@ constraint. Make a database backup before applying it.
 - Password reset uses a six-digit, one-time code emailed through Brevo. Codes
   are stored hashed, expire after ten minutes, and have a limited number of
   attempts. Sending email requires a Brevo API key and a verified sender.
+  Requests are limited to three per IP per minute, and an active code prevents
+  an immediate duplicate send. If Brevo rejects a request, the response
+  includes a support reference; the matching Render log records provider
+  status/error without the API key, reset code, or recipient address. Check
+  Brevo's transactional email logs to distinguish an API rejection from a
+  message accepted but later filtered or bounced. For HTTP 401/403, check that
+  the API key is active, has transactional-email sending permission, and
+  permits the Render service's outbound IP ranges. Find current ranges in the
+  Render service's **Connect > Outbound** panel; do not allowlist a home
+  network address instead. A Gmail sender can be verified but its domain
+  cannot be authenticated in Brevo, which warns that free-email domains can
+  have reduced deliverability.
 - Staff may enroll multiple selected members in a Paluwagan cycle; the backend
   randomizes their payout order. Xendit collects contributions only; it does
   not send the pooled Paluwagan payout. Staff confirmation adds the payout to
@@ -259,10 +272,15 @@ Copy the test-mode callback verification token into Render's
 school demo. Do not switch to live mode without completing Xendit's account
 verification and deciding how the cooperative will account for provider fees.
 
-For password-reset email, create a Brevo API key, verify the sender address,
-and set those values in Render. Until configured, OTP emails cannot be
-delivered. Neither the database migration nor these provider settings have
-been applied to a hosted service by this project change.
+For password-reset email, create a Brevo API key with transactional email
+permission, verify the sender address, and set those values in Render. If the
+key uses an IP allowlist, include the outbound IP ranges shown under the
+Render service's **Connect > Outbound** panel. A free Gmail sender is not
+domain-authenticated and may have poor inbox delivery; check the sender's
+Brevo compliance warnings and transactional email logs. A non-2xx provider
+response is logged with a support reference but never includes the API key,
+recipient address, or OTP. Neither the database migration nor these provider
+settings have been applied to a hosted service by this project change.
 
 Savings auto-pay is disabled unless each member opts in. To run it in a hosted
 deployment, configure a separate daily Render Cron Job from this repository's

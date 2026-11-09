@@ -103,19 +103,20 @@ class ApiAuth extends Controller
             $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
         }
 
-        $recent_requests = (int) $this->db->raw(
-            'SELECT COUNT(*) AS total FROM password_reset_otps
-             WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)',
-            [(int) $user['id']]
-        )->fetch(PDO::FETCH_ASSOC)['total'];
-        if ($recent_requests >= 3) {
-            $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
-        }
-
         $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $this->db->transaction();
         try {
             $this->db->raw('SELECT id FROM users WHERE id = ? FOR UPDATE', [(int) $user['id']])->fetch();
+            $active_requests = (int) $this->db->raw(
+                'SELECT COUNT(*) AS total FROM password_reset_otps
+                 WHERE user_id = ? AND consumed_at IS NULL
+                   AND created_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)',
+                [(int) $user['id']]
+            )->fetch(PDO::FETCH_ASSOC)['total'];
+            if ($active_requests > 0) {
+                $this->db->commit();
+                $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
+            }
             $this->db->raw(
                 'UPDATE password_reset_otps SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL',
                 [date('Y-m-d H:i:s'), (int) $user['id']]
@@ -143,8 +144,15 @@ class ApiAuth extends Controller
                 'UPDATE password_reset_otps SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL',
                 [date('Y-m-d H:i:s'), (int) $id]
             );
-            error_log('CoopWise password reset email delivery failed for user ' . (int) $user['id'] . ': ' . $error->getMessage());
-            $this->api->respond_error('A password-reset email could not be sent. Check the email sender configuration and try again later.', 502);
+            $support_reference = bin2hex(random_bytes(6));
+            error_log(
+                'CoopWise password reset email delivery failed; reference=' . $support_reference
+                . '; user_id=' . (int) $user['id'] . '; provider_error=' . $error->getMessage()
+            );
+            $this->api->respond_error(
+                'The email provider did not accept the password-reset message. Wait a minute and try again. If it keeps failing, share support reference ' . $support_reference . '.',
+                502
+            );
         }
         $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
     }
@@ -248,7 +256,24 @@ class ApiAuth extends Controller
         preg_match('/\s(\d{3})\s/', $status_line, $matches);
         $status = (int) ($matches[1] ?? 0);
         if (!is_string($response) || $status < 200 || $status >= 300) {
-            throw new RuntimeException('Brevo email API returned HTTP ' . ($status ?: 'unknown') . '.');
+            $details = is_string($response) ? json_decode($response, true) : null;
+            $provider_code = is_array($details) ? (string) ($details['code'] ?? '') : '';
+            $provider_message = is_array($details) ? (string) ($details['message'] ?? '') : '';
+            $provider_message = trim(preg_replace('/\s+/', ' ', strip_tags($provider_message)));
+            if ($provider_message !== '') {
+                $provider_message = str_ireplace([$email, $sender_email, $otp], '[redacted]', $provider_message);
+                $provider_message = substr($provider_message, 0, 300);
+            }
+            if ($status === 0) {
+                $transport_error = error_get_last();
+                $provider_message = $transport_error['message'] ?? 'No HTTP response was received from Brevo.';
+                $provider_message = substr(trim(preg_replace('/\s+/', ' ', strip_tags($provider_message))), 0, 300);
+            }
+            throw new RuntimeException(
+                'Brevo HTTP ' . ($status ?: 'unknown')
+                . ($provider_code !== '' ? ' (' . substr($provider_code, 0, 80) . ')' : '')
+                . ($provider_message !== '' ? ': ' . $provider_message : '')
+            );
         }
     }
 

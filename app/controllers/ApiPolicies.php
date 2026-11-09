@@ -18,6 +18,7 @@ class ApiPolicies extends Controller
     {
         $this->api->require_method('GET');
         $this->authenticated_user();
+        $this->require_policy_schema();
         $policy = $this->db->raw(
             'SELECT membership_policy, share_capital_policy, loan_policy,
                     paluwagan_policy, demo_balance_policy, updated_at
@@ -34,6 +35,7 @@ class ApiPolicies extends Controller
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
         $this->require_staff($user);
+        $this->require_policy_schema();
 
         $fields = [
             'membership_policy',
@@ -95,6 +97,21 @@ class ApiPolicies extends Controller
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
             $this->api->respond_error('Only cooperative staff can update policies.', 403);
+        }
+    }
+
+    private function require_policy_schema()
+    {
+        $exists = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'cooperative_policies'"
+        )->fetchColumn();
+        if ((int) $exists !== 1) {
+            error_log('CoopWise policy schema is missing; apply database/coopwise_policies_upgrade.sql.');
+            $this->api->respond_error(
+                'Cooperative policies are not configured in the database yet. Run database/coopwise_policies_upgrade.sql in Navicat, then retry.',
+                503
+            );
         }
     }
 }

@@ -1,3 +1,5 @@
+USE coopwise_db;
+
 CREATE TABLE IF NOT EXISTS cooperative_policies (
     id TINYINT UNSIGNED NOT NULL,
     membership_policy TEXT NOT NULL,
