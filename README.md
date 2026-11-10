@@ -298,8 +298,8 @@ database.
 This project is a school/demo application, not a live banking service. Xendit
 should remain in test mode for the school demo; a test payment does not move
 real money. Live processing has provider eligibility and fee requirements.
-The project does not connect to CARD Bank. Profile editing, settings,
-and expanded notification features are not implemented.
+The project does not connect to CARD Bank. General profile editing is not
+implemented; members can manage their SMS payment-reminder opt-in from Savings.
 
 ## Separate frontend and Render deployment
 
@@ -320,7 +320,9 @@ transaction reversals. Xendit-confirmed payments update the appropriate
 ledger. Loan approvals and confirmed Paluwagan payouts credit the member's
 available balance. Members can immediately simulate withdrawals; no staff
 review or real transfer is involved. Members can also explicitly opt in to loan
-or Paluwagan auto-pay from their available balance.
+or Paluwagan auto-pay from their available balance. Members can separately opt
+in to non-promotional SMS reminders for overdue loan installments and
+unrecorded previous-day Paluwagan contributions; SMS is disabled until configured.
 Other legacy pages remain in the LavaLust app and have not yet been migrated to
 the separate frontend.
 
@@ -334,8 +336,9 @@ the separate frontend.
    managed MySQL database). For a new database, import `coopwise_schema.sql`.
    For an existing database, back it up and apply the additive upgrades in
    order: registration, loans/cooperative, documents/payments, financial
-   workflows, share capital, then Xendit/email. Skip any upgrade already
-   applied. Use a trusted database client and do not drop existing tables. The
+   workflows, share capital, then Xendit/email. Apply
+   `database/coopwise_brevo_sms_reminders_upgrade.sql` after those migrations.
+   Skip any upgrade already applied. Use a trusted database client and do not drop existing tables. The
    Xendit/email migration depends on the earlier loan, cycle, and
    share-capital tables. For a database where `/api/cooperative/cycles`
    returns a schema-related error, back up the database and apply
@@ -352,8 +355,15 @@ the separate frontend.
    for allowed origins. Keep `XENDIT_MODE=test` while
    testing, and set `XENDIT_SECRET_KEY` and `XENDIT_WEBHOOK_TOKEN` using
    test credentials from Xendit. Set `BREVO_API_KEY` and the verified
-   `BREVO_SENDER_EMAIL` to enable password-reset email. Do not put secret keys
-   in Vercel or frontend environment variables.
+   `BREVO_SENDER_EMAIL` to enable password-reset email. SMS reminders default
+   to disabled: after enabling the member opt-in UI, configure
+   `BREVO_SMS_SENDER` with Brevo's registered sender and set
+   `COOPWISE_SMS_REMINDERS_ENABLED=true` only after confirming the account can
+   send SMS to the Philippines and has SMS credits. SMS is not included as a
+   free add-on to transactional email; check Brevo's current country-specific
+   pricing and account requirements first. `COOPWISE_BUSINESS_TIMEZONE` defaults
+   to `Asia/Manila`. Do not put secret keys in Vercel or frontend environment
+   variables.
 4. Configure `/api/health` as Render's health-check path.
 
 To enable Turnstile, create a Cloudflare Turnstile widget for the exact frontend
@@ -386,14 +396,23 @@ response is logged with a support reference but never includes the API key,
 recipient address, or OTP. Neither the database migration nor these provider
 settings have been applied to a hosted service by this project change.
 
-Savings auto-pay is disabled unless each member opts in. To run it in a hosted
-deployment, configure a separate daily Render Cron Job from this repository's
-Docker image with start command `php /var/www/html/scripts/daily_savings_auto_pay.php`.
+Savings auto-pay is disabled unless each member opts in. SMS reminders are also
+disabled by default and require each member's explicit opt-in. To run either
+feature in a hosted deployment, configure a daily Render Cron Job from this
+repository's Docker image with start command
+`php /var/www/html/scripts/daily_savings_auto_pay.php`.
 Give the job the same `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`,
 `DB_PASSWORD`, and `DB_SSL_CA` environment and CA Secret File as the web service.
 Render schedules use UTC; choose the run time to match the cooperative's
-business-day boundary. Review Render's current Cron Job pricing before creating
-one; the existing free web service does not run this script automatically.
+business-day boundary. This job also sends one SMS for each overdue loan
+installment and each missing previous-day Paluwagan contribution, with a unique
+database log preventing duplicate sends on repeat runs. It sends no amounts or
+account balances. Failed attempts are logged and are not automatically retried
+to avoid duplicate texts if Brevo accepted a message but the response was lost.
+Review Render's current Cron Job pricing before creating one; the existing free
+web service does not run this script automatically. Do not enable SMS until
+the database migration, Brevo SMS sender/credits, Render environment, and
+scheduled job are all ready.
 
 The free web service is suitable for a school demo, not a production banking
 service. Render spins it down after 15 minutes without traffic; the first

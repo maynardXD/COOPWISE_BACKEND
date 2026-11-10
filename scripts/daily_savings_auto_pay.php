@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/lib/financial_workflows.php';
+require_once __DIR__ . '/lib/brevo_sms_reminders.php';
 
 $database = [
     'host' => getenv('DB_HOST') ?: '127.0.0.1',
@@ -228,6 +229,13 @@ foreach ($members as $member) {
         $processed['errors']++;
         error_log('CoopWise daily savings auto-pay failed for member ' . $memberId . ': ' . $error->getMessage());
     }
+}
+
+try {
+    $processed['sms_reminders'] = coopwiseProcessPaymentSmsReminders($db);
+} catch (Throwable $error) {
+    $processed['sms_reminders'] = ['status' => 'failed', 'attempted' => 0, 'sent' => 0, 'failed' => 0];
+    error_log('CoopWise Brevo SMS reminder job failed: ' . $error->getMessage());
 }
 
 try {
