@@ -65,7 +65,24 @@ class ApiLoans extends Controller
         }
         $member = $this->member_profile($user);
         $this->require_finance_schema();
-        $this->api->respond(['eligibility' => $this->member_eligibility($member)]);
+        $eligibility = $this->member_eligibility($member);
+        $eligibility['active_loans'] = $this->db->raw(
+            "SELECT l.id, l.loan_code, l.current_balance, lt.name AS loan_type_name,
+                    (SELECT ls.due_date
+                     FROM loan_schedules ls
+                     WHERE ls.loan_id = l.id AND ls.status IN ('pending', 'overdue')
+                     ORDER BY ls.due_date ASC, ls.id ASC LIMIT 1) AS next_due_date,
+                    (SELECT GREATEST(ls.total_due - ls.paid_amount, 0)
+                     FROM loan_schedules ls
+                     WHERE ls.loan_id = l.id AND ls.status IN ('pending', 'overdue')
+                     ORDER BY ls.due_date ASC, ls.id ASC LIMIT 1) AS next_due_amount
+             FROM loans l
+             INNER JOIN loan_types lt ON lt.id = l.loan_type_id
+             WHERE l.member_id = ? AND l.status IN ('approved', 'active') AND l.current_balance > 0
+             ORDER BY l.created_at DESC, l.id DESC",
+            [(int) $member['id']]
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $this->api->respond(['eligibility' => $eligibility]);
     }
 
     public function create_product()
@@ -375,7 +392,8 @@ class ApiLoans extends Controller
         $term = filter_var($data['term_months'] ?? null, FILTER_VALIDATE_INT);
         $purpose = trim((string) ($data['purpose'] ?? ''));
         $allowed_purposes = ['Medical', 'Emergency', 'Allowance', 'Education', 'Livelihood / business'];
-        $is_other_purpose = strpos($purpose, 'Other: ') === 0 && trim(substr($purpose, 7)) !== '';
+        $is_other_purpose = strpos($purpose, 'Other: ') === 0
+            && preg_match('/\A[A-Za-z ]{1,128}\z/', trim(substr($purpose, 7))) === 1;
         if (!$product_id || $principal === false || $principal < 1 || !$term
             || strlen($purpose) > 255
             || (!in_array($purpose, $allowed_purposes, true) && !$is_other_purpose)) {
