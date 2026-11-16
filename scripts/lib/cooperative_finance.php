@@ -16,6 +16,51 @@ function cooperativeFormatCents(int $amount): string
     return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
 }
 
+function cooperativeLoanCapitalCapacity(
+    int $paidUpShareCapital,
+    int $collectedInterest,
+    int $outstandingPrincipal,
+    int $pendingPrincipal = 0
+): int {
+    return max(0, $paidUpShareCapital + $collectedInterest - $outstandingPrincipal - $pendingPrincipal);
+}
+
+function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null): array
+{
+    $pendingLoanFilter = $excludePendingLoanId === null ? '' : ' AND id <> ?';
+    $params = $excludePendingLoanId === null ? [] : [$excludePendingLoanId];
+    $row = $db->raw(
+        "SELECT
+            (SELECT COALESCE(SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END), 0)
+             FROM share_capital_transactions) AS paid_up_share_capital,
+            (SELECT COALESCE(SUM(interest_paid), 0)
+             FROM loan_payments WHERE breakdown_recorded = 1) AS collected_interest,
+            (SELECT COALESCE(SUM(GREATEST(s.principal_due - s.principal_paid, 0)), 0)
+             FROM loan_schedules s
+             INNER JOIN loans l ON l.id = s.loan_id
+             WHERE l.status IN ('approved', 'active')) AS outstanding_principal,
+            (SELECT COALESCE(SUM(principal_amount), 0)
+             FROM loans WHERE status = 'pending'{$pendingLoanFilter}) AS pending_principal",
+        $params
+    )->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        throw new RuntimeException('Cooperative lending capacity could not be calculated.');
+    }
+
+    $paidUp = cooperativeMoneyToCents((string) $row['paid_up_share_capital']);
+    $interest = cooperativeMoneyToCents((string) $row['collected_interest']);
+    $outstanding = cooperativeMoneyToCents((string) $row['outstanding_principal']);
+    $pending = cooperativeMoneyToCents((string) $row['pending_principal']);
+
+    return [
+        'paid_up_share_capital' => $paidUp,
+        'collected_interest' => $interest,
+        'outstanding_principal' => $outstanding,
+        'pending_principal' => $pending,
+        'available' => cooperativeLoanCapitalCapacity($paidUp, $interest, $outstanding, $pending)
+    ];
+}
+
 function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecondsPerDay = 6): int
 {
     if ($elapsedSeconds < 0 || $realSecondsPerDay < 1) {

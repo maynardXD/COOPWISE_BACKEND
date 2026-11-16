@@ -22,12 +22,19 @@ class ApiLoans extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $this->require_finance_schema();
+        $availableCapital = cooperativeAvailableLoanCapital($this->db)['available'];
+        $availableCapitalFormatted = self::format_cents($availableCapital);
         $readiness = null;
         if ($user['role'] === 'member') {
             $member = $this->member_profile($user);
             $readiness = $this->latest_readiness((int) $member['id']);
             if (!$readiness || $readiness['status'] !== 'approved') {
-                $this->api->respond(['products' => [], 'loan_readiness' => $readiness]);
+                $this->api->respond([
+                    'products' => [],
+                    'loan_readiness' => $readiness,
+                    'available_loan_capital' => $availableCapitalFormatted
+                ]);
             }
         }
 
@@ -36,7 +43,17 @@ class ApiLoans extends Controller
         if ($user['role'] === 'member') {
             $query->where('status', 'active')->where('max_amount', '>', 0);
         }
-        $this->api->respond(['products' => $query->order_by('name', 'ASC')->get_all(), 'loan_readiness' => $readiness]);
+        $products = $query->order_by('name', 'ASC')->get_all();
+        if ($user['role'] === 'member') {
+            $products = array_values(array_filter($products, static function (array $product) use ($availableCapital): bool {
+                return self::money_to_cents((string) $product['max_amount']) <= $availableCapital;
+            }));
+        }
+        $this->api->respond([
+            'products' => $products,
+            'loan_readiness' => $readiness,
+            'available_loan_capital' => $availableCapitalFormatted
+        ]);
     }
 
     public function eligibility()
@@ -164,32 +181,45 @@ class ApiLoans extends Controller
             || $term > (int) $product['max_term_months']) {
             $this->api->respond_error('The requested amount or term exceeds this product’s limits.', 422);
         }
-        $eligibility = $this->member_eligibility($member, null, self::money_to_cents((string) $product['max_amount']));
-        if (!$eligibility['eligible']) {
-            $this->api->respond_error(implode(' ', $eligibility['reasons']), 403);
-        }
-        if ($principal > self::money_to_cents($eligibility['max_eligible_amount'])) {
-            $this->api->respond_error(
-                'The requested amount exceeds your current cooperative eligibility limit of PHP ' . $eligibility['max_eligible_amount'] . '.',
-                422
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
+            $eligibility = $this->member_eligibility(
+                $member,
+                null,
+                self::money_to_cents((string) $product['max_amount'])
             );
-        }
-
-        $id = $this->db->table('loans')->insert([
-            'member_id' => (int) $member['id'],
-            'loan_type_id' => $product_id,
-            'loan_code' => 'CW-LN-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
-            'principal_amount' => self::format_cents($principal),
-            'approved_amount' => self::format_cents($principal),
-            'interest_rate' => number_format((float) $product['interest_rate'], 2, '.', ''),
-            'term_months' => $term,
-            'purpose' => $purpose !== '' ? $purpose : null,
-            'status' => 'pending',
-            'current_balance' => '0.00',
-            'total_paid' => '0.00'
-        ]);
-        if (!$id) {
-            throw new RuntimeException('Loan application could not be saved.');
+            if (!$eligibility['eligible']) {
+                throw new DomainException(implode(' ', $eligibility['reasons']));
+            }
+            if ($principal > self::money_to_cents($eligibility['max_eligible_amount'])) {
+                throw new DomainException(
+                    'The requested amount exceeds your current eligible limit of PHP ' . $eligibility['max_eligible_amount'] . '.'
+                );
+            }
+            $id = $this->db->table('loans')->insert([
+                'member_id' => (int) $member['id'],
+                'loan_type_id' => $product_id,
+                'loan_code' => 'CW-LN-' . date('YmdHis') . '-' . bin2hex(random_bytes(3)),
+                'principal_amount' => self::format_cents($principal),
+                'approved_amount' => self::format_cents($principal),
+                'interest_rate' => number_format((float) $product['interest_rate'], 2, '.', ''),
+                'term_months' => $term,
+                'purpose' => $purpose !== '' ? $purpose : null,
+                'status' => 'pending',
+                'current_balance' => '0.00',
+                'total_paid' => '0.00'
+            ]);
+            if (!$id) {
+                throw new RuntimeException('Loan application could not be saved.');
+            }
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            throw $error;
         }
 
         $this->api->respond(['message' => 'Loan application submitted for review.', 'id' => (int) $id], 201);
@@ -298,6 +328,7 @@ class ApiLoans extends Controller
 
         $this->db->transaction();
         try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
             $loan = $this->db->table('loans')->where('id', $loan_id)->get();
             if (!$loan || $loan['status'] !== 'pending') {
                 throw new DomainException('This application has already been reviewed or does not exist.');
@@ -346,13 +377,6 @@ class ApiLoans extends Controller
                         : 'The requested amount exceeds the member’s current eligibility limit of PHP ' . $eligibility['max_eligible_amount'] . '.'
                 );
             }
-            $fund = $this->db->raw(
-                'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1 FOR UPDATE'
-            )->fetch(PDO::FETCH_ASSOC);
-            if (!$fund || self::money_to_cents((string) $fund['available_balance']) < $principal) {
-                throw new DomainException('The simulated cooperative lending pool does not have enough available funds.');
-            }
-            $fund_balance = self::money_to_cents((string) $fund['available_balance']) - $principal;
             $term = (int) $loan['term_months'];
             $rate_basis_points = (int) round((float) $loan['interest_rate'] * 100);
             $interest = (int) round($principal * $rate_basis_points * $term / 10000);
@@ -393,26 +417,6 @@ class ApiLoans extends Controller
             if (!$disbursement_id) {
                 throw new RuntimeException('Loan was approved but its savings disbursement could not be recorded.');
             }
-            $fund_updated = $this->db->table('cooperative_loan_fund')->where('id', 1)->update([
-                'available_balance' => self::format_cents($fund_balance),
-                'updated_by_user_id' => (int) $user['id']
-            ]);
-            if ($fund_updated === false) {
-                throw new RuntimeException('The lending-pool balance could not be updated for this loan.');
-            }
-            $fund_transaction_id = $this->db->table('cooperative_loan_fund_transactions')->insert([
-                'transaction_type' => 'loan_disbursement',
-                'amount' => self::format_cents($principal),
-                'balance_after' => self::format_cents($fund_balance),
-                'reference_no' => 'CW-FUND-DISBURSE-' . $loan['loan_code'],
-                'loan_id' => (int) $loan_id,
-                'description' => 'Approved simulated loan disbursement.',
-                'created_by_user_id' => (int) $user['id']
-            ]);
-            if (!$fund_transaction_id) {
-                throw new RuntimeException('The lending-pool disbursement history could not be saved.');
-            }
-
             $approved_date = new DateTimeImmutable('today');
             $first_due_month = $approved_date->modify('first day of next month');
             $due_day = (int) $approved_date->format('j');
@@ -457,7 +461,7 @@ class ApiLoans extends Controller
             error_log('CoopWise API loan review failed: ' . $error->getMessage());
             throw $error;
         }
-        $this->api->respond(['message' => 'Application approved, the lending pool was reduced by the principal, the member’s demo savings were credited, and monthly installments were generated. Share capital was not reduced.']);
+        $this->api->respond(['message' => 'Application approved, available cooperative capital was reduced by the principal, the member’s demo savings were credited, and monthly installments were generated.']);
     }
 
     public function schedule($loan_id = null)
@@ -639,12 +643,23 @@ class ApiLoans extends Controller
             (float) $policies['loan_to_paid_up_share_capital_multiplier'],
             $product_limit
         );
+        $loan_capital = cooperativeAvailableLoanCapital($this->db, $ignored_pending_loan_id);
+        $cooperative_limit = $loan_capital['available'];
+        $eligibility['max_eligible_amount_cents'] = min(
+            $eligibility['max_eligible_amount_cents'],
+            $cooperative_limit
+        );
+        if ($eligibility['max_eligible_amount_cents'] < 1) {
+            $eligibility['eligible'] = false;
+            $eligibility['reasons'][] = 'The cooperative has no uncommitted share capital available for lending.';
+        }
         return [
             'eligible' => $eligibility['eligible'],
             'max_eligible_amount' => self::format_cents($eligibility['max_eligible_amount_cents']),
             'paid_up_share_capital' => self::format_cents(max(0, self::money_to_cents((string) ($capital['total'] ?? '0.00')))),
             'savings_balance' => self::format_cents(max(0, self::money_to_cents((string) ($savings['total'] ?? '0.00')))),
             'active_loan_balance' => self::format_cents(max(0, self::money_to_cents((string) ($active['total'] ?? '0.00')))),
+            'available_loan_capital' => self::format_cents($cooperative_limit),
             'membership_days' => $membership_days,
             'membership_elapsed_seconds' => $membership_elapsed_seconds,
             'membership_checked_at' => time(),
@@ -661,12 +676,6 @@ class ApiLoans extends Controller
 
     private function require_finance_schema()
     {
-        $tables = $this->db->raw(
-            "SELECT COUNT(*) FROM information_schema.tables
-             WHERE table_schema = DATABASE() AND table_name IN (
-                 'cooperative_loan_fund', 'cooperative_loan_fund_transactions'
-             )"
-        )->fetchColumn();
         $columns = $this->db->raw(
             "SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = DATABASE() AND (
@@ -678,10 +687,10 @@ class ApiLoans extends Controller
                  (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid'))
              )"
         )->fetchColumn();
-        if ((int) $tables !== 2 || (int) $columns !== 9) {
+        if ((int) $columns !== 9) {
             error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
             $this->api->respond_error(
-                'Loan eligibility and lending-pool tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
+                'Loan eligibility and capital tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
                 503
             );
         }

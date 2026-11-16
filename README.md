@@ -52,18 +52,20 @@ reuse its branding, images, or website copy.
    cooperative policies for the Learning Center. It creates only the missing
    table and inserts its default row only if that row is absent.
    Then run `database/coopwise_cooperative_finance_upgrade.sql` to add
-   configurable loan-eligibility rules, a separate simulated lending-pool
-   ledger, principal/interest repayment breakdowns, and annual surplus/member
-   returns. An unpublished draft can be cancelled and recalculated; an approved
-   return is published as a calculation only and is not automatically paid or
-   credited. This migration depends on the cooperative policies, loan, savings,
-   and share-capital tables and is required before deploying the updated API;
-   back up the database first. The lending pool starts at PHP 0.00, so staff
-   must record simulated funding before approving loans. Loan approval leaves
-   member share capital unchanged. Surplus calculations remain drafts until
-   staff approval; the classroom patronage basis is loan interest paid during
-   the fiscal year. Verify actual bylaws, accounting, and required approvals
-   before applying any real cooperative rules.
+   configurable loan-eligibility rules, principal/interest repayment
+   breakdowns, and annual surplus/member returns. An unpublished draft can be
+   cancelled and recalculated. Follow it with
+   `database/coopwise_member_return_claims_upgrade.sql` to enable one-time
+   transfers of approved returns to savings or share capital. Loan capacity
+   is calculated from paid-up share capital plus collected interest, less
+   outstanding principal and pending applications; repayments restore
+   capacity. Member share ownership balances are not erased on disbursement.
+   Existing lending-pool tables, if present, are legacy history and are no
+   longer read or updated; do not drop them as part of this change. Surplus
+   calculations remain drafts until staff approval; the classroom patronage
+   basis is loan interest paid during the fiscal year. Verify actual bylaws,
+   accounting, and required approvals before applying any real cooperative
+   rules.
    For this classroom simulation only, each configured membership day passes
    in six real seconds; the default 30-day eligibility period therefore takes
    three minutes. This accelerated clock is not suitable for real cooperative
@@ -137,10 +139,12 @@ database.
   pay through Xendit checkout or deduct the payment from available savings.
   Xendit payments update after provider confirmation; savings-funded payments
   debit the member balance and apply the payment together in one database
-  transaction. Staff maintain a separate simulated loan fund and approval
-  checks its available balance; a disbursement does not reduce a member's
-  share capital. The backend applies repayments to scheduled interest and
-  principal separately and records both amounts for member and staff reports.
+  transaction. Loan approval checks available cooperative share capital and
+  reduces the capital available for additional loans. Paid-up member ownership
+  remains recorded; collected interest increases lending capacity, while
+  principal repayments restore it. The backend applies repayments to
+  scheduled interest and principal separately and records both amounts for
+  member and staff reports.
 - Staff create a daily cooperative cycle, set the contribution amount, enroll
   multiple selected members with a randomized payout order, and activate it.
   Each enrolled member contributes once per day through Xendit checkout.
@@ -290,14 +294,17 @@ database.
 - Staff can view cooperative-wide reports. Member dashboards show only that
   member's activity. The staff Reports page loads five recent audit events at
   a time, with further history fetched when requested. Loan application status
-  counts and paginated lending-pool history are shown in Loans; member meetings
-  and voting are not included.
+  counts and currently available share capital are shown in Loans; member
+  meetings and voting are not included.
 - Share capital is tracked separately from savings. Staff create subscriptions
   using cooperative-approved share counts and par values. Members can pay the
   unpaid amount through Xendit checkout or deduct it from their savings
   balance. Corrections are retained as linked reversal records instead of
   deleting the original transaction. Staff and members can view subscribed,
   paid-up, and unpaid amounts; members can only access their own records.
+  Approved member returns can be transferred once to savings or reinvested
+  into a new share subscription using that member's latest active subscription
+  par value.
 
 This project is a school/demo application, not a live banking service. Xendit
 should remain in test mode for the school demo; a test payment does not move

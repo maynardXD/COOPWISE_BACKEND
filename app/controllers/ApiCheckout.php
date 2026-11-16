@@ -893,32 +893,6 @@ class ApiCheckout extends Controller
             'status' => $new_balance === 0 ? 'completed' : 'active'
         ]);
 
-        $fund = $this->db->raw(
-            'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1 FOR UPDATE'
-        )->fetch(PDO::FETCH_ASSOC);
-        if (!$fund) {
-            throw new RuntimeException('The cooperative loan fund is not configured for loan repayments.');
-        }
-        $fund_balance = self::money_to_cents((string) $fund['available_balance']) + $amount;
-        $fund_updated = $this->db->table('cooperative_loan_fund')->where('id', 1)->update([
-            'available_balance' => self::format_cents($fund_balance)
-        ]);
-        if ($fund_updated === false) {
-            throw new RuntimeException('The cooperative lending-pool balance could not be updated for this repayment.');
-        }
-        $fund_transaction_id = $this->db->table('cooperative_loan_fund_transactions')->insert([
-            'transaction_type' => 'loan_repayment',
-            'amount' => self::format_cents($amount),
-            'balance_after' => self::format_cents($fund_balance),
-            'reference_no' => 'CW-FUND-REPAY-' . $payment['reference_no'],
-            'loan_id' => (int) $loan['id'],
-            'description' => 'Confirmed loan repayment (principal ' . self::format_cents($principal_paid)
-                . ', interest ' . self::format_cents($interest_paid) . ').',
-            'created_by_user_id' => $payment['paid_by_user_id'] ?? null
-        ]);
-        if (!$fund_transaction_id) {
-            throw new RuntimeException('The lending-pool repayment history could not be saved.');
-        }
     }
 
     private function apply_savings_deposit(array $payment)

@@ -1,6 +1,8 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
+
 class ApiReports extends Controller
 {
     private $api;
@@ -38,9 +40,7 @@ class ApiReports extends Controller
         $loan_principal_receivable = $this->db->raw(
             'SELECT COALESCE(SUM(GREATEST(principal_due - principal_paid, 0)), 0) AS total FROM loan_schedules'
         )->fetch(PDO::FETCH_ASSOC);
-        $loan_fund = $this->db->raw(
-            'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1'
-        )->fetch(PDO::FETCH_ASSOC);
+        $loan_capital = cooperativeAvailableLoanCapital($this->db);
         $approved_member_returns = $this->db->raw(
             "SELECT COALESCE(SUM(r.total_return), 0) AS total
              FROM cooperative_member_returns r
@@ -107,7 +107,7 @@ class ApiReports extends Controller
                 'share_capital_paid_up' => self::format_cents(self::money_to_cents((string) ($share_capital_paid['total'] ?? '0.00'))),
                 'loan_balance' => number_format((float) $loan_balance, 2, '.', ''),
                 'loan_principal_receivable' => number_format((float) ($loan_principal_receivable['total'] ?? 0), 2, '.', ''),
-                'loan_fund_available' => number_format((float) ($loan_fund['available_balance'] ?? 0), 2, '.', ''),
+                'available_loan_capital' => self::format_cents($loan_capital['available']),
                 'loan_payments_received' => number_format((float) $loan_payments, 2, '.', ''),
                 'loan_interest_received' => number_format((float) $loan_interest_received, 2, '.', ''),
                 'approved_member_returns' => number_format((float) ($approved_member_returns['total'] ?? 0), 2, '.', '')
@@ -217,7 +217,6 @@ class ApiReports extends Controller
         $tables = $this->db->raw(
             "SELECT COUNT(*) FROM information_schema.tables
              WHERE table_schema = DATABASE() AND table_name IN (
-                 'cooperative_loan_fund', 'cooperative_loan_fund_transactions',
                  'cooperative_surplus_distributions', 'cooperative_member_returns'
              )"
         )->fetchColumn();
@@ -230,10 +229,13 @@ class ApiReports extends Controller
                      'cooperative_registration_date'
                  )) OR
                  (table_name = 'loan_payments' AND column_name IN ('principal_paid', 'interest_paid', 'breakdown_recorded')) OR
-                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid'))
+                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid')) OR
+                 (table_name = 'cooperative_member_returns' AND column_name IN (
+                     'claim_status', 'claimed_at', 'claim_reference'
+                 ))
              )"
         )->fetchColumn();
-        if ((int) $tables !== 4 || (int) $columns !== 10) {
+        if ((int) $tables !== 2 || (int) $columns !== 13) {
             error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
             $this->api->respond_error(
                 'Cooperative finance reports are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',

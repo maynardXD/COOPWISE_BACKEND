@@ -36,8 +36,6 @@ class ApiHealth extends Controller
                 'refresh_tokens',
                 'auto_pay_runs',
                 'cooperative_policies',
-                'cooperative_loan_fund',
-                'cooperative_loan_fund_transactions',
                 'cooperative_surplus_distributions',
                 'cooperative_member_returns'
             ];
@@ -61,7 +59,10 @@ class ApiHealth extends Controller
                 ['loan_payments', 'interest_paid'],
                 ['loan_payments', 'breakdown_recorded'],
                 ['loan_schedules', 'principal_paid'],
-                ['loan_schedules', 'interest_paid']
+                ['loan_schedules', 'interest_paid'],
+                ['cooperative_member_returns', 'claim_status'],
+                ['cooperative_member_returns', 'claimed_at'],
+                ['cooperative_member_returns', 'claim_reference']
             ];
             $column_conditions = [];
             $column_parameters = [];

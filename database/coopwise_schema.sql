@@ -189,37 +189,6 @@ CREATE TABLE IF NOT EXISTS loan_payments (
     CONSTRAINT fk_payments_user FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS cooperative_loan_fund (
-    id TINYINT UNSIGNED NOT NULL,
-    available_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-    updated_by_user_id INT UNSIGNED NULL,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT fk_cooperative_loan_fund_updater FOREIGN KEY (updated_by_user_id)
-        REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-INSERT IGNORE INTO cooperative_loan_fund (id, available_balance) VALUES (1, 0.00);
-
-CREATE TABLE IF NOT EXISTS cooperative_loan_fund_transactions (
-    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    transaction_type ENUM('funding','loan_disbursement','loan_repayment') NOT NULL,
-    amount DECIMAL(12,2) NOT NULL,
-    balance_after DECIMAL(12,2) NOT NULL,
-    reference_no VARCHAR(100) NOT NULL,
-    loan_id INT UNSIGNED NULL,
-    description VARCHAR(255) NULL,
-    created_by_user_id INT UNSIGNED NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_cooperative_loan_fund_reference (reference_no),
-    KEY idx_cooperative_loan_fund_created (created_at, id),
-    CONSTRAINT fk_cooperative_loan_fund_transaction_loan FOREIGN KEY (loan_id)
-        REFERENCES loans(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT fk_cooperative_loan_fund_transaction_creator FOREIGN KEY (created_by_user_id)
-        REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     fiscal_year SMALLINT UNSIGNED NOT NULL,
@@ -253,6 +222,9 @@ CREATE TABLE IF NOT EXISTS cooperative_member_returns (
     interest_on_share_capital DECIMAL(12,2) NOT NULL,
     patronage_refund DECIMAL(12,2) NOT NULL,
     total_return DECIMAL(12,2) NOT NULL,
+    claim_status ENUM('available','paid_to_savings','reinvested') NOT NULL DEFAULT 'available',
+    claimed_at DATETIME NULL,
+    claim_reference VARCHAR(100) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_surplus_member_return (distribution_id, member_id),

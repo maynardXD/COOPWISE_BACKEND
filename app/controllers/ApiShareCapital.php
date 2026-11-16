@@ -183,6 +183,7 @@ class ApiShareCapital extends Controller
 
         $this->db->transaction();
         try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
             $payment = $this->db->raw(
                 "SELECT id, member_id, subscription_id, amount
                  FROM share_capital_transactions

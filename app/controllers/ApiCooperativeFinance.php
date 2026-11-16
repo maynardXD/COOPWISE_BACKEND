@@ -22,51 +22,27 @@ class ApiCooperativeFinance extends Controller
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
         $this->require_finance_schema();
-        $fund = $this->db->raw(
-            'SELECT available_balance, updated_at FROM cooperative_loan_fund WHERE id = 1'
-        )->fetch(PDO::FETCH_ASSOC);
-        if (!$fund) {
-            throw new RuntimeException('The cooperative loan fund account is missing.');
-        }
         $policy = $this->db->raw(
             'SELECT cooperative_registration_date FROM cooperative_policies WHERE id = 1'
         )->fetch(PDO::FETCH_ASSOC);
 
         $result = [
-            'loan_fund' => [
-                'available_balance' => self::format_cents(self::money_to_cents((string) $fund['available_balance'])),
-                'updated_at' => $fund['updated_at']
-            ],
-            'cooperative_registration_date' => $policy['cooperative_registration_date'] ?? null,
-            'fund_transactions' => [],
-            'fund_transactions_pagination' => [
-                'page' => 1,
-                'per_page' => 5,
-                'has_more' => false
-            ]
+            'available_loan_capital' => self::format_cents(cooperativeAvailableLoanCapital($this->db)['available']),
+            'cooperative_registration_date' => $policy['cooperative_registration_date'] ?? null
         ];
-        if (in_array($user['role'], ['admin', 'officer'], true)
-            && ($_GET['fund_history'] ?? '1') !== '0') {
-            $fund_pagination = $this->api->pagination_params(5, 5, 'fund_page', 'per_page');
-            $result['fund_transactions'] = $this->db->raw(
-                'SELECT t.id, t.transaction_type, t.amount, t.balance_after, t.reference_no,
-                        t.description, t.created_at, u.full_name AS actor_name, l.loan_code
-                 FROM cooperative_loan_fund_transactions t
-                 LEFT JOIN users u ON u.id = t.created_by_user_id
-                 LEFT JOIN loans l ON l.id = t.loan_id
-                 ORDER BY t.created_at DESC, t.id DESC LIMIT '
-                    . (int) ($fund_pagination['per_page'] + 1)
-                    . ' OFFSET ' . (int) $fund_pagination['offset']
-            )->fetchAll(PDO::FETCH_ASSOC);
-            $fund_has_more = count($result['fund_transactions']) > $fund_pagination['per_page'];
-            if ($fund_has_more) {
-                array_pop($result['fund_transactions']);
-            }
-            $result['fund_transactions_pagination'] = [
-                'page' => $fund_pagination['page'],
-                'per_page' => $fund_pagination['per_page'],
-                'has_more' => $fund_has_more
-            ];
+        $result['approved_member_returns'] = self::format_cents(self::money_to_cents((string) ($this->db->raw(
+            "SELECT COALESCE(SUM(r.total_return), 0) AS total
+             FROM cooperative_member_returns r
+             INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
+             WHERE d.status = 'approved'"
+        )->fetch(PDO::FETCH_ASSOC)['total'] ?? '0.00')));
+        if ($user['role'] === 'admin' || $user['role'] === 'officer') {
+            $result['available_member_returns'] = self::format_cents(self::money_to_cents((string) ($this->db->raw(
+                "SELECT COALESCE(SUM(r.total_return), 0) AS total
+                 FROM cooperative_member_returns r
+                 INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
+                 WHERE d.status = 'approved' AND r.claim_status = 'available'"
+            )->fetch(PDO::FETCH_ASSOC)['total'] ?? '0.00')));
         }
 
         if ($user['role'] === 'member') {
@@ -74,7 +50,7 @@ class ApiCooperativeFinance extends Controller
             $result['member_returns'] = $this->db->raw(
                 "SELECT r.id, r.distribution_id, d.fiscal_year, r.paid_up_share_capital,
                         r.patronage_basis, r.interest_on_share_capital, r.patronage_refund,
-                        r.total_return, d.approved_at
+                        r.total_return, r.claim_status, r.claimed_at, d.approved_at
                  FROM cooperative_member_returns r
                  INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
                  WHERE r.member_id = ? AND d.status = 'approved'
@@ -85,61 +61,136 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond($result);
     }
 
-    public function fund()
+    public function claim_returns()
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
-        $this->require_staff($user);
         $this->require_finance_schema();
-        $data = $this->api->body();
-        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
-        $description = trim((string) ($data['description'] ?? ''));
-        if ($amount === false || $amount < 1 || strlen($description) > 255) {
-            $this->api->respond_error('Enter a positive funding amount and a description of at most 255 characters.', 422);
+        $member = $this->member_profile($user);
+        $destination = $this->api->body()['destination'] ?? '';
+        if (!in_array($destination, ['savings', 'share_capital'], true)) {
+            $this->api->respond_error('Choose savings or share capital for your approved member returns.', 422);
         }
 
         $this->db->transaction();
         try {
-            $fund = $this->db->raw(
-                'SELECT available_balance FROM cooperative_loan_fund WHERE id = 1 FOR UPDATE'
-            )->fetch(PDO::FETCH_ASSOC);
-            if (!$fund) {
-                throw new RuntimeException('The cooperative loan fund account is missing.');
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
+            $returns = $this->db->raw(
+                "SELECT r.id, r.total_return
+                 FROM cooperative_member_returns r
+                 INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
+                 WHERE r.member_id = ? AND d.status = 'approved' AND r.claim_status = 'available'
+                 ORDER BY d.fiscal_year ASC, r.id ASC
+                 FOR UPDATE",
+                [(int) $member['id']]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            if (!$returns) {
+                throw new DomainException('There are no approved member returns available to transfer.');
             }
-            $balance = self::money_to_cents((string) $fund['available_balance']) + $amount;
-            $updated = $this->db->table('cooperative_loan_fund')->where('id', 1)->update([
-                'available_balance' => self::format_cents($balance),
-                'updated_by_user_id' => (int) $user['id']
-            ]);
-            if ($updated === false) {
-                throw new RuntimeException('The cooperative lending pool could not be funded.');
+            $amount = 0;
+            $return_ids = [];
+            foreach ($returns as $return) {
+                $amount += self::money_to_cents((string) $return['total_return']);
+                $return_ids[] = (int) $return['id'];
             }
-            $reference = 'CW-FUND-' . date('YmdHis') . '-' . bin2hex(random_bytes(3));
-            $transaction_id = $this->db->table('cooperative_loan_fund_transactions')->insert([
-                'transaction_type' => 'funding',
+            $reference = 'CW-RETURN-' . strtoupper($destination) . '-' . bin2hex(random_bytes(12));
+            if ($destination === 'savings') {
+                $balance = $this->db->raw(
+                    "SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END), 0) AS total
+                     FROM savings_transactions WHERE member_id = ?",
+                    [(int) $member['id']]
+                )->fetch(PDO::FETCH_ASSOC);
+                $balance_after = self::money_to_cents((string) ($balance['total'] ?? '0.00')) + $amount;
+                $inserted = $this->db->table('savings_transactions')->insert([
+                    'member_id' => (int) $member['id'],
+                    'type' => 'deposit',
+                    'amount' => self::format_cents($amount),
+                    'balance_after' => self::format_cents($balance_after),
+                    'reference_no' => $reference,
+                    'description' => 'Approved cooperative dividend/member return credited to savings.',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$inserted) {
+                    throw new RuntimeException('The approved member returns could not be credited to savings.');
+                }
+            } else {
+                $subscription = $this->db->raw(
+                    "SELECT id, par_value FROM share_capital_subscriptions
+                     WHERE member_id = ? AND status = 'active'
+                     ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE",
+                    [(int) $member['id']]
+                )->fetch(PDO::FETCH_ASSOC);
+                if (!$subscription) {
+                    throw new DomainException('An active share subscription is required before returns can be reinvested.');
+                }
+                $par_value = self::money_to_cents((string) $subscription['par_value']);
+                $share_count = (int) ceil($amount / $par_value);
+                if ($share_count < 1 || $share_count > 999999999
+                    || $par_value > intdiv(999999999999, $share_count)) {
+                    throw new DomainException('The return amount exceeds the supported share subscription limit.');
+                }
+                $subscribed_amount = $par_value * $share_count;
+                $subscription_id = $this->db->table('share_capital_subscriptions')->insert([
+                    'member_id' => (int) $member['id'],
+                    'subscription_number' => 'CW-SHR-RETURN-' . bin2hex(random_bytes(10)),
+                    'subscribed_shares' => $share_count,
+                    'par_value' => self::format_cents($par_value),
+                    'subscribed_amount' => self::format_cents($subscribed_amount),
+                    'subscription_date' => date('Y-m-d'),
+                    'status' => 'active',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$subscription_id) {
+                    throw new RuntimeException('The reinvestment share subscription could not be created.');
+                }
+                $inserted = $this->db->table('share_capital_transactions')->insert([
+                    'member_id' => (int) $member['id'],
+                    'subscription_id' => (int) $subscription_id,
+                    'transaction_type' => 'payment',
+                    'amount' => self::format_cents($amount),
+                    'balance_after' => self::format_cents($amount),
+                    'transaction_reference' => $reference,
+                    'payment_method' => 'simulation',
+                    'description' => 'Approved cooperative dividend/member return reinvested as share capital.',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$inserted) {
+                    throw new RuntimeException('The approved member returns could not be reinvested as share capital.');
+                }
+            }
+            foreach ($return_ids as $return_id) {
+                $updated = $this->db->table('cooperative_member_returns')
+                    ->where('id', $return_id)
+                    ->where('claim_status', 'available')
+                    ->update([
+                        'claim_status' => $destination === 'savings' ? 'paid_to_savings' : 'reinvested',
+                        'claimed_at' => date('Y-m-d H:i:s'),
+                        'claim_reference' => $reference
+                    ]);
+                if ($updated !== 1) {
+                    throw new DomainException('A member return was already transferred. Refresh the page and check your balance.');
+                }
+            }
+            $this->write_activity_log((int) $user['id'], 'cooperative_finance', 'member_returns_claimed', [
+                'destination' => $destination,
                 'amount' => self::format_cents($amount),
-                'balance_after' => self::format_cents($balance),
-                'reference_no' => $reference,
-                'description' => $description !== '' ? $description : 'Staff-recorded simulated lending-pool funding.',
-                'created_by_user_id' => (int) $user['id']
-            ]);
-            if (!$transaction_id) {
-                throw new RuntimeException('The lending-pool funding history could not be saved.');
-            }
-            $this->write_activity_log((int) $user['id'], 'cooperative_finance', 'loan_fund_added', [
-                'amount' => self::format_cents($amount),
-                'balance_after' => self::format_cents($balance),
+                'return_ids' => $return_ids,
                 'reference_no' => $reference
             ]);
             $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
         } catch (Throwable $error) {
             $this->db->roll_back();
             throw $error;
         }
         $this->api->respond([
-            'message' => 'Simulated lending-pool funds recorded.',
-            'available_balance' => self::format_cents($balance)
-        ], 201);
+            'message' => $destination === 'savings'
+                ? 'Approved member returns were added to your savings.'
+                : 'Approved member returns were reinvested as share capital.',
+            'amount' => self::format_cents($amount)
+        ]);
     }
 
     public function surplus()
@@ -471,8 +522,6 @@ class ApiCooperativeFinance extends Controller
     private function require_finance_schema()
     {
         $required_tables = [
-            'cooperative_loan_fund',
-            'cooperative_loan_fund_transactions',
             'cooperative_surplus_distributions',
             'cooperative_member_returns'
         ];
@@ -491,10 +540,13 @@ class ApiCooperativeFinance extends Controller
                      'cooperative_registration_date'
                  )) OR
                  (table_name = 'loan_payments' AND column_name IN ('principal_paid', 'interest_paid', 'breakdown_recorded')) OR
-                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid'))
+                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid')) OR
+                 (table_name = 'cooperative_member_returns' AND column_name IN (
+                     'claim_status', 'claimed_at', 'claim_reference'
+                 ))
              )"
         )->fetchColumn();
-        if ((int) $found !== count($required_tables) || (int) $columns !== 10) {
+        if ((int) $found !== count($required_tables) || (int) $columns !== 13) {
             error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
             $this->api->respond_error(
                 'Cooperative finance features are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
