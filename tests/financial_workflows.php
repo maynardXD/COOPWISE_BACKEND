@@ -116,6 +116,7 @@ assertSameValue(false, $moneyParser->invoke(null, '12.345'), 'Amounts with exces
 $paymentMethodParser = new ReflectionMethod(ApiCheckout::class, 'payment_method_for_reference');
 $paymentMethodParser->setAccessible(true);
 assertSameValue('savings', $paymentMethodParser->invoke(null, 'CW-SAV-PAY-test'), 'Savings references should be labeled as savings payments');
+assertSameValue('staff', $paymentMethodParser->invoke(null, 'CW-STAFF-PAY-test'), 'Staff-recorded payments should be distinguishable from provider checkout');
 assertSameValue('xendit', $paymentMethodParser->invoke(null, 'CW-PAY-test'), 'Provider payment references should be labeled as Xendit payments');
 assertSameValue(3000, autoPayLoanAmount(3000, 10000, 12000), 'Auto-pay should apply available savings as a partial installment');
 assertSameValue(8000, autoPayLoanAmount(12000, 8000, 10000), 'Auto-pay should not collect more than the remaining installment');

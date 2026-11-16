@@ -76,8 +76,10 @@ $router->options('/api/health/ready', 'ApiHealth::index');
 $router->get('/api/loan-products', 'ApiLoans::products');
 $router->post('/api/loan-products', 'ApiLoans::create_product');
 $router->put('/api/loan-products/{product_id}', 'ApiLoans::update_product')->where_number('product_id');
+$router->delete('/api/loan-products/{product_id}', 'ApiLoans::delete_product')->where_number('product_id');
 $router->get('/api/loans', 'ApiLoans::loans');
 $router->post('/api/loans', 'ApiLoans::apply');
+$router->post('/api/loans/{loan_id}/payments', 'ApiLoans::record_payment')->where_number('loan_id');
 $router->get('/api/loans/eligibility', 'ApiLoans::eligibility');
 $router->get('/api/loan-readiness', 'ApiLoans::readiness');
 $router->post('/api/loan-readiness', 'ApiLoans::readiness');
@@ -117,6 +119,7 @@ $router->post('/api/cooperative/surplus/{distribution_id}/cancel', 'ApiCooperati
 $router->options('/api/loan-products', 'ApiHealth::index');
 $router->options('/api/loan-products/{product_id}', 'ApiHealth::index')->where_number('product_id');
 $router->options('/api/loans', 'ApiHealth::index');
+$router->options('/api/loans/{loan_id}/payments', 'ApiHealth::index')->where_number('loan_id');
 $router->options('/api/loans/eligibility', 'ApiHealth::index');
 $router->options('/api/loan-readiness', 'ApiHealth::index');
 $router->options('/api/loan-readiness/{submission_id}/review', 'ApiHealth::index')->where_number('submission_id');

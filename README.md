@@ -66,6 +66,11 @@ reuse its branding, images, or website copy.
    basis is loan interest paid during the fiscal year. Verify actual bylaws,
    accounting, and required approvals before applying any real cooperative
    rules.
+   Members can choose a loan-purpose category (medical, emergency, allowance,
+   education, or livelihood/business) and explain other purposes. Loan
+   repayments can be paid in full from the payment form, while staff can record
+   payments already received; pending online checkout amounts remain reserved
+   and cannot be double-counted.
    For this classroom simulation only, each configured membership day passes
    in six real seconds; the default 30-day eligibility period therefore takes
    three minutes. This accelerated clock is not suitable for real cooperative

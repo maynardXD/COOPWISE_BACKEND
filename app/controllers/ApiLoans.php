@@ -103,6 +103,185 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan product updated.']);
     }
 
+    public function delete_product($product_id = null)
+    {
+        $this->api->require_method('DELETE');
+        $user = $this->authenticated_user();
+        $this->require_staff($user);
+        $product_id = filter_var($product_id, FILTER_VALIDATE_INT);
+        if (!$product_id || $product_id < 1) {
+            $this->api->respond_error('Choose a valid loan offer to delete.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            $product = $this->db->raw(
+                'SELECT id, name FROM loan_types WHERE id = ? FOR UPDATE',
+                [(int) $product_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$product) {
+                throw new DomainException('The loan offer was not found.');
+            }
+            $loan_count = (int) $this->db->table('loans')
+                ->where('loan_type_id', (int) $product_id)
+                ->count();
+            if ($loan_count > 0) {
+                throw new DomainException(
+                    'This offer has loan history and cannot be deleted. Pause it instead to keep member records intact.'
+                );
+            }
+            $deleted = $this->db->table('loan_types')
+                ->where('id', (int) $product_id)
+                ->delete();
+            if ($deleted !== 1) {
+                throw new DomainException('The loan offer could not be deleted.');
+            }
+            $this->write_activity_log((int) $user['id'], 'loans', 'offer_deleted', [
+                'product_id' => (int) $product_id,
+                'name' => $product['name']
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise loan offer deletion failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond(['message' => 'Loan offer deleted.']);
+    }
+
+    public function record_payment($loan_id = null)
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        $this->require_staff($user);
+        $this->require_finance_schema();
+        $loan_id = filter_var($loan_id, FILTER_VALIDATE_INT);
+        $data = $this->api->body();
+        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
+        $payment_method = trim((string) ($data['payment_method'] ?? 'cash'));
+        if (!$loan_id || $loan_id < 1 || $amount === false || $amount < 1
+            || !in_array($payment_method, ['simulation', 'cash', 'bank', 'gcash', 'check'], true)) {
+            $this->api->respond_error('Choose a valid loan, positive payment amount, and supported received-payment method.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            $loan = $this->db->raw('SELECT * FROM loans WHERE id = ? FOR UPDATE', [(int) $loan_id])
+                ->fetch(PDO::FETCH_ASSOC);
+            if (!$loan || !in_array($loan['status'], ['approved', 'active'], true)) {
+                throw new DomainException('Only an approved or active loan can receive a payment.');
+            }
+            $balance = self::money_to_cents((string) $loan['current_balance']);
+            $pending = $this->db->raw(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM payment_transactions
+                 WHERE loan_id = ? AND status IN ('pending', 'needs_review')",
+                [(int) $loan_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            $available = $balance - self::money_to_cents((string) ($pending['total'] ?? '0.00'));
+            if ($amount > $available) {
+                throw new DomainException(
+                    'The payment cannot exceed the remaining amount not already reserved by another checkout: PHP '
+                    . self::format_cents(max(0, $available)) . '.'
+                );
+            }
+
+            $schedules = $this->db->raw(
+                "SELECT * FROM loan_schedules
+                 WHERE loan_id = ? AND status IN ('pending', 'overdue')
+                 ORDER BY due_date ASC, id ASC FOR UPDATE",
+                [(int) $loan_id]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            try {
+                $allocation = allocateLoanRepayment($amount, $schedules);
+            } catch (InvalidArgumentException $error) {
+                throw new DomainException($error->getMessage());
+            }
+            foreach ($allocation['schedules'] as $schedule) {
+                $updated = $this->db->table('loan_schedules')
+                    ->where('id', (int) $schedule['id'])
+                    ->update([
+                        'paid_amount' => $schedule['paid_amount'],
+                        'principal_paid' => $schedule['principal_paid'],
+                        'interest_paid' => $schedule['interest_paid'],
+                        'status' => $schedule['status']
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('An installment could not be updated for the recorded payment.');
+                }
+            }
+
+            $reference = 'CW-STAFF-PAY-' . strtoupper(bin2hex(random_bytes(10)));
+            $payment_id = $this->db->table('payment_transactions')->insert([
+                'member_id' => (int) $loan['member_id'],
+                'purpose' => 'loan',
+                'amount' => self::format_cents($amount),
+                'currency' => 'PHP',
+                'reference_no' => $reference,
+                'loan_id' => (int) $loan_id,
+                'status' => 'paid',
+                'paid_at' => date('Y-m-d H:i:s'),
+                'applied_at' => date('Y-m-d H:i:s')
+            ]);
+            if (!$payment_id) {
+                throw new RuntimeException('The staff-recorded payment transaction could not be saved.');
+            }
+            $inserted = $this->db->table('loan_payments')->insert([
+                'loan_id' => (int) $loan_id,
+                'member_id' => (int) $loan['member_id'],
+                'paid_by_user_id' => (int) $user['id'],
+                'amount_paid' => self::format_cents($amount),
+                'principal_paid' => self::format_cents($allocation['principal_paid']),
+                'interest_paid' => self::format_cents($allocation['interest_paid']),
+                'breakdown_recorded' => 1,
+                'payment_method' => $payment_method,
+                'reference_no' => $reference,
+                'payment_date' => date('Y-m-d H:i:s')
+            ]);
+            if (!$inserted) {
+                throw new RuntimeException('The loan repayment ledger entry could not be saved.');
+            }
+
+            $new_balance = $balance - $amount;
+            $updated_loan = $this->db->table('loans')
+                ->where('id', (int) $loan_id)
+                ->update([
+                    'current_balance' => self::format_cents($new_balance),
+                    'total_paid' => self::format_cents(self::money_to_cents((string) $loan['total_paid']) + $amount),
+                    'status' => $new_balance === 0 ? 'completed' : 'active'
+                ]);
+            if ($updated_loan !== 1) {
+                throw new RuntimeException('The loan balance could not be updated.');
+            }
+            $this->write_activity_log((int) $user['id'], 'loans', 'staff_payment_recorded', [
+                'loan_id' => (int) $loan_id,
+                'loan_code' => $loan['loan_code'],
+                'payment_id' => (int) $payment_id,
+                'amount' => self::format_cents($amount),
+                'payment_method' => $payment_method,
+                'reference_no' => $reference
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise staff loan payment failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => 'The received loan payment was recorded.',
+            'reference_no' => $reference,
+            'amount' => self::format_cents($amount),
+            'remaining_balance' => self::format_cents($new_balance)
+        ], 201);
+    }
+
     public function loans()
     {
         $this->api->require_method('GET');
@@ -125,7 +304,11 @@ class ApiLoans extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
 
         $query = $this->db->table('loans l')
-            ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
+            ->select("l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid,
+                      GREATEST(l.current_balance - COALESCE((SELECT SUM(pt.amount) FROM payment_transactions pt
+                          WHERE pt.loan_id = l.id AND pt.status IN ('pending', 'needs_review')), 0), 0) AS available_repayment_amount,
+                      l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at,
+                      lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name")
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
             ->inner_join('members m', 'm.id = l.member_id');
         if ($member) {
@@ -170,8 +353,12 @@ class ApiLoans extends Controller
         $principal = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
         $term = filter_var($data['term_months'] ?? null, FILTER_VALIDATE_INT);
         $purpose = trim((string) ($data['purpose'] ?? ''));
-        if (!$product_id || $principal === false || $principal < 1 || !$term || strlen($purpose) > 255) {
-            $this->api->respond_error('Enter a valid product, positive amount, term, and purpose.', 422);
+        $allowed_purposes = ['Medical', 'Emergency', 'Allowance', 'Education', 'Livelihood / business'];
+        $is_other_purpose = strpos($purpose, 'Other: ') === 0 && trim(substr($purpose, 7)) !== '';
+        if (!$product_id || $principal === false || $principal < 1 || !$term
+            || strlen($purpose) > 255
+            || (!in_array($purpose, $allowed_purposes, true) && !$is_other_purpose)) {
+            $this->api->respond_error('Choose a valid loan purpose, specify a custom purpose if needed, and enter a positive amount and term.', 422);
         }
 
         $product = $this->db->table('loan_types')

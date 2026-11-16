@@ -1206,6 +1206,9 @@ class ApiCheckout extends Controller
 
     private static function payment_method_for_reference(string $reference_no): string
     {
-        return strpos($reference_no, 'CW-SAV-PAY-') === 0 ? 'savings' : 'xendit';
+        if (strpos($reference_no, 'CW-SAV-PAY-') === 0) {
+            return 'savings';
+        }
+        return strpos($reference_no, 'CW-STAFF-PAY-') === 0 ? 'staff' : 'xendit';
     }
 }
