@@ -38,17 +38,35 @@ class ApiCooperativeFinance extends Controller
                 'updated_at' => $fund['updated_at']
             ],
             'cooperative_registration_date' => $policy['cooperative_registration_date'] ?? null,
-            'fund_transactions' => []
+            'fund_transactions' => [],
+            'fund_transactions_pagination' => [
+                'page' => 1,
+                'per_page' => 5,
+                'has_more' => false
+            ]
         ];
-        if (in_array($user['role'], ['admin', 'officer'], true)) {
+        if (in_array($user['role'], ['admin', 'officer'], true)
+            && ($_GET['fund_history'] ?? '1') !== '0') {
+            $fund_pagination = $this->api->pagination_params(5, 5, 'fund_page', 'per_page');
             $result['fund_transactions'] = $this->db->raw(
                 'SELECT t.id, t.transaction_type, t.amount, t.balance_after, t.reference_no,
                         t.description, t.created_at, u.full_name AS actor_name, l.loan_code
                  FROM cooperative_loan_fund_transactions t
                  LEFT JOIN users u ON u.id = t.created_by_user_id
                  LEFT JOIN loans l ON l.id = t.loan_id
-                 ORDER BY t.created_at DESC, t.id DESC LIMIT 50'
+                 ORDER BY t.created_at DESC, t.id DESC LIMIT '
+                    . (int) ($fund_pagination['per_page'] + 1)
+                    . ' OFFSET ' . (int) $fund_pagination['offset']
             )->fetchAll(PDO::FETCH_ASSOC);
+            $fund_has_more = count($result['fund_transactions']) > $fund_pagination['per_page'];
+            if ($fund_has_more) {
+                array_pop($result['fund_transactions']);
+            }
+            $result['fund_transactions_pagination'] = [
+                'page' => $fund_pagination['page'],
+                'per_page' => $fund_pagination['per_page'],
+                'has_more' => $fund_has_more
+            ];
         }
 
         if ($user['role'] === 'member') {

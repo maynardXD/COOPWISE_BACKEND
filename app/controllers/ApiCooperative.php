@@ -136,6 +136,21 @@ class ApiCooperative extends Controller
                 ->where('contribution_date', date('Y-m-d'))
                 ->count();
             $cycle['member_count'] = count($cycle['members']);
+            if (!$member && $cycle['status'] === 'draft') {
+                $cycle_history = $this->db->raw(
+                    'SELECT
+                        (SELECT COUNT(*) FROM cooperative_contributions WHERE cycle_id = ?) AS contribution_count,
+                        (SELECT COUNT(*) FROM cooperative_payouts WHERE cycle_id = ?) AS payout_count,
+                        (SELECT COUNT(*) FROM payment_transactions WHERE cycle_id = ?) AS payment_count',
+                    [$cycle_id, $cycle_id, $cycle_id]
+                )->fetch(PDO::FETCH_ASSOC);
+                $cycle['can_remove'] = $cycle_history
+                    && (int) $cycle_history['contribution_count'] === 0
+                    && (int) $cycle_history['payout_count'] === 0
+                    && (int) $cycle_history['payment_count'] === 0;
+            } elseif (!$member) {
+                $cycle['can_remove'] = false;
+            }
             $cycle['ready_payout'] = $this->db->table('cooperative_payouts cp')
                 ->select('cp.id, cp.member_id, cp.payout_order, cp.payout_date, cp.amount, cp.reference_no, cp.status, m.member_number, m.first_name, m.last_name')
                 ->inner_join('members m', 'm.id = cp.member_id')
@@ -219,24 +234,84 @@ class ApiCooperative extends Controller
         $name = trim((string) ($data['name'] ?? ''));
         $amount = self::money_to_cents(trim((string) ($data['daily_contribution'] ?? '')));
         $start_date = trim((string) ($data['start_date'] ?? ''));
+        $raw_member_ids = $data['member_ids'] ?? null;
         $date = DateTimeImmutable::createFromFormat('!Y-m-d', $start_date);
         $date_errors = DateTimeImmutable::getLastErrors();
         if ($name === '' || strlen($name) > 120 || $amount === false || $amount < 1
             || !$date || ($date_errors && ($date_errors['warning_count'] || $date_errors['error_count']))
-            || $date->format('Y-m-d') !== $start_date || $start_date < date('Y-m-d')) {
-            $this->api->respond_error('Enter a cycle name, positive daily amount, and valid start date today or later.', 422);
+            || $date->format('Y-m-d') !== $start_date || $start_date < date('Y-m-d')
+            || !is_array($raw_member_ids) || count($raw_member_ids) < 2 || count($raw_member_ids) > 999) {
+            $this->api->respond_error('Enter a cycle name, positive daily amount, valid start date, and select 2 to 999 active members.', 422);
         }
-        $id = $this->db->table('cooperative_cycles')->insert([
-            'name' => $name,
-            'daily_contribution' => self::format_cents($amount),
-            'start_date' => $start_date,
-            'status' => 'draft',
-            'created_by_user_id' => (int) $user['id']
-        ]);
-        if (!$id) {
-            throw new RuntimeException('Cycle creation failed.');
+        $member_ids = [];
+        foreach ($raw_member_ids as $raw_member_id) {
+            $member_id = filter_var($raw_member_id, FILTER_VALIDATE_INT);
+            if (!$member_id || $member_id < 1) {
+                $this->api->respond_error('Every selected member must be valid.', 422);
+            }
+            $member_ids[] = (int) $member_id;
         }
-        $this->api->respond(['message' => 'Draft cycle created.', 'id' => (int) $id], 201);
+        if (count(array_unique($member_ids)) !== count($member_ids)) {
+            $this->api->respond_error('A member may be selected only once.', 422);
+        }
+        if ($amount > intdiv(999999999999, count($member_ids))) {
+            $this->api->respond_error('The pooled payout exceeds the maximum supported amount.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            foreach ($member_ids as $member_id) {
+                $member = $this->db->table('members')
+                    ->where('id', $member_id)
+                    ->where('status', 'active')
+                    ->get();
+                if (!$member) {
+                    throw new DomainException('Only active members can join a new cycle.');
+                }
+            }
+            $id = $this->db->table('cooperative_cycles')->insert([
+                'name' => $name,
+                'daily_contribution' => self::format_cents($amount),
+                'start_date' => $start_date,
+                'status' => 'draft',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$id) {
+                throw new RuntimeException('Cycle creation failed.');
+            }
+            for ($index = count($member_ids) - 1; $index > 0; $index--) {
+                $random_index = random_int(0, $index);
+                [$member_ids[$index], $member_ids[$random_index]] = [$member_ids[$random_index], $member_ids[$index]];
+            }
+            foreach ($member_ids as $index => $member_id) {
+                $inserted = $this->db->table('cooperative_cycle_members')->insert([
+                    'cycle_id' => (int) $id,
+                    'member_id' => $member_id,
+                    'payout_order' => $index + 1
+                ]);
+                if (!$inserted) {
+                    throw new RuntimeException('A selected member could not be enrolled in the new cycle.');
+                }
+            }
+            $this->write_activity_log((int) $user['id'], 'cooperative', 'cycle_created', [
+                'cycle_id' => (int) $id,
+                'cycle_name' => $name,
+                'member_count' => count($member_ids)
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise cycle creation failed: ' . $error->getMessage());
+            throw $error;
+        }
+        $this->api->respond([
+            'message' => 'Daily cycle created as a draft with members enrolled and a randomized payout order.',
+            'id' => (int) $id,
+            'member_ids_in_payout_order' => $member_ids
+        ], 201);
     }
 
     public function add_member()
@@ -329,6 +404,61 @@ class ApiCooperative extends Controller
             'message' => count($member_ids) . ' member(s) added with a randomized payout order.',
             'member_ids_in_payout_order' => $member_ids
         ], 201);
+    }
+
+    public function remove_cycle()
+    {
+        $this->api->require_method('DELETE');
+        $user = $this->authenticated_user();
+        $this->require_staff($user);
+        $cycle_id = filter_var(($this->api->body())['cycle_id'] ?? null, FILTER_VALIDATE_INT);
+        if (!$cycle_id || $cycle_id < 1) {
+            $this->api->respond_error('Choose a valid draft cycle to remove.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            $cycle = $this->db->raw(
+                'SELECT id, name, status FROM cooperative_cycles WHERE id = ? FOR UPDATE',
+                [(int) $cycle_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$cycle || $cycle['status'] !== 'draft') {
+                throw new DomainException('Only a draft cycle can be removed.');
+            }
+
+            $history = $this->db->raw(
+                'SELECT
+                    (SELECT COUNT(*) FROM cooperative_contributions WHERE cycle_id = ?) AS contribution_count,
+                    (SELECT COUNT(*) FROM cooperative_payouts WHERE cycle_id = ?) AS payout_count,
+                    (SELECT COUNT(*) FROM payment_transactions WHERE cycle_id = ?) AS payment_count',
+                [(int) $cycle_id, (int) $cycle_id, (int) $cycle_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$history || (int) $history['contribution_count'] > 0
+                || (int) $history['payout_count'] > 0 || (int) $history['payment_count'] > 0) {
+                throw new DomainException('This draft cycle has payment or payout history and cannot be removed.');
+            }
+
+            $deleted = $this->db->table('cooperative_cycles')
+                ->where('id', (int) $cycle_id)
+                ->where('status', 'draft')
+                ->delete();
+            if ($deleted !== 1) {
+                throw new DomainException('The draft cycle could not be removed.');
+            }
+            $this->write_activity_log((int) $user['id'], 'cooperative', 'cycle_removed', [
+                'cycle_id' => (int) $cycle_id,
+                'cycle_name' => $cycle['name']
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise draft cycle removal failed: ' . $error->getMessage());
+            throw $error;
+        }
+        $this->api->respond(['message' => 'Draft cycle removed.']);
     }
 
     public function remove_member()

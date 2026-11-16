@@ -56,10 +56,6 @@ class ApiReports extends Controller
             'SELECT type, SUM(amount) AS total FROM savings_transactions WHERE created_at >= ? AND created_at < ? GROUP BY type',
             [$start, $end]
         )->fetchAll(PDO::FETCH_ASSOC);
-        $monthly_loans = $this->db->raw(
-            'SELECT status, COUNT(*) AS total FROM loans WHERE created_at >= ? AND created_at < ? GROUP BY status',
-            [$start, $end]
-        )->fetchAll(PDO::FETCH_ASSOC);
         $monthly_loan_payments = $this->db->raw(
             'SELECT COALESCE(SUM(amount_paid), 0) AS total FROM loan_payments WHERE payment_date >= ? AND payment_date < ?',
             [$start, $end]
@@ -79,17 +75,9 @@ class ApiReports extends Controller
             ->where('created_at', '>=', $start)
             ->where('created_at', '<', $end)
             ->count();
-        $loan_statuses = $this->db->raw(
-            'SELECT status, COUNT(*) AS total FROM loans GROUP BY status ORDER BY status ASC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-        $activity_logs = $this->db->raw(
-            'SELECT al.id, al.module, al.action, al.details, al.created_at,
-                    u.full_name AS actor_name, u.role AS actor_role
-             FROM activity_logs al
-             LEFT JOIN users u ON u.id = al.user_id
-             ORDER BY al.created_at DESC, al.id DESC
-             LIMIT 50'
-        )->fetchAll(PDO::FETCH_ASSOC);
+        $activity_pagination = $this->api->pagination_params(5, 5, 'activity_page', 'activity_per_page');
+        $activity_result = $this->fetch_activity_logs($activity_pagination);
+        $activity_logs = $activity_result['activity_logs'];
         $overdue_installments = $this->db->raw(
             "SELECT COUNT(*) AS count,
                     COALESCE(SUM(GREATEST(total_due - paid_amount, 0)), 0) AS outstanding
@@ -108,10 +96,6 @@ class ApiReports extends Controller
         $savings_by_type = ['deposit' => '0.00', 'withdrawal' => '0.00'];
         foreach ($monthly_savings as $row) {
             $savings_by_type[$row['type']] = number_format((float) $row['total'], 2, '.', '');
-        }
-        $applications_by_status = [];
-        foreach ($monthly_loans as $row) {
-            $applications_by_status[$row['status']] = (int) $row['total'];
         }
         $this->api->respond([
             'period' => $period_start->format('F Y'),
@@ -133,15 +117,58 @@ class ApiReports extends Controller
                 'savings_deposits' => $savings_by_type['deposit'],
                 'savings_withdrawals' => $savings_by_type['withdrawal'],
                 'share_capital_payments' => self::format_cents(self::money_to_cents((string) ($monthly_share_capital_payments['total'] ?? '0.00'))),
-                'loan_applications' => $applications_by_status,
                 'loan_payments_received' => number_format((float) ($monthly_loan_payments['total'] ?? 0), 2, '.', ''),
                 'loan_principal_received' => number_format((float) ($monthly_loan_payment_split['principal'] ?? 0), 2, '.', ''),
                 'loan_interest_received' => number_format((float) ($monthly_loan_payment_split['interest'] ?? 0), 2, '.', '')
             ],
-            'loan_statuses' => $loan_statuses,
             'activity_logs' => $activity_logs,
+            'activity_pagination' => [
+                'page' => $activity_pagination['page'],
+                'per_page' => $activity_pagination['per_page'],
+                'has_more' => $activity_result['has_more']
+            ],
             'operations' => $operations
         ]);
+    }
+
+    public function activity()
+    {
+        $this->api->require_method('GET');
+        $user = $this->authenticated_user();
+        if (!in_array($user['role'], ['admin', 'officer'], true)) {
+            $this->api->respond_error('Reports are available to cooperative staff only.', 403);
+        }
+        $pagination = $this->api->pagination_params(5, 5, 'activity_page', 'activity_per_page');
+        $result = $this->fetch_activity_logs($pagination);
+        $this->api->respond([
+            'activity_logs' => $result['activity_logs'],
+            'pagination' => [
+                'page' => $pagination['page'],
+                'per_page' => $pagination['per_page'],
+                'has_more' => $result['has_more']
+            ]
+        ]);
+    }
+
+    private function fetch_activity_logs(array $pagination)
+    {
+        $activity_logs = $this->db->raw(
+            'SELECT al.id, al.module, al.action, al.details, al.created_at,
+                    u.full_name AS actor_name, u.role AS actor_role
+             FROM activity_logs al
+             LEFT JOIN users u ON u.id = al.user_id
+             ORDER BY al.created_at DESC, al.id DESC
+             LIMIT ' . (int) ($pagination['per_page'] + 1)
+            . ' OFFSET ' . (int) $pagination['offset']
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $has_more = count($activity_logs) > $pagination['per_page'];
+        if ($has_more) {
+            array_pop($activity_logs);
+        }
+        return [
+            'activity_logs' => $activity_logs,
+            'has_more' => $has_more
+        ];
     }
 
     private function sum($table, $column, $filter_column = null, $filter_value = null)

@@ -265,13 +265,15 @@ database.
   Authorized JavaScript origins. Keep the client ID in the backend environment;
   it is returned by the public auth configuration endpoint for the browser
   button. No database migration or downloaded SDK is required.
-- Staff Reports uses Google Charts to visualize monthly financial activity and
-  loan status totals. Charts contain cooperative-wide aggregates and do not send
-  member names or account-level data to the chart UI. The library loads from
+- Staff Reports uses Google Charts to visualize monthly financial activity.
+  Charts contain cooperative-wide aggregates and do not send member names or
+  account-level data to the chart UI. The library loads from
   Google's hosted Charts loader when staff open Reports; without network access,
   the rest of the report tables remain available.
-- Staff may enroll multiple selected members in a Paluwagan cycle; the backend
-  randomizes their payout order. Xendit collects contributions only; it does
+- Staff create a Paluwagan draft with its selected members in one transaction
+  after reviewing the cycle details and member list. The backend randomizes
+  payout order. Only an empty draft without payment or contribution history can
+  be removed. Xendit collects contributions only; it does
   not send the pooled Paluwagan payout. Staff confirmation adds the payout to
   the recipient's demo balance without moving real money.
 - Existing demo payment-submission records are retained, but the new frontend
@@ -286,8 +288,10 @@ database.
   manner and limitations of lending and borrowing in cooperative bylaws
   ([Lawphil text](https://lawphil.net/statutes/repacts/ra2009/ra_9520_2009.html)).
 - Staff can view cooperative-wide reports. Member dashboards show only that
-  member's activity. The staff Reports page also shows the 50 most recent
-  application audit events; member meetings and voting are not included.
+  member's activity. The staff Reports page loads five recent audit events at
+  a time, with further history fetched when requested. Loan application status
+  counts and paginated lending-pool history are shown in Loans; member meetings
+  and voting are not included.
 - Share capital is tracked separately from savings. Staff create subscriptions
   using cooperative-approved share counts and par values. Members can pay the
   unpaid amount through Xendit checkout or deduct it from their savings

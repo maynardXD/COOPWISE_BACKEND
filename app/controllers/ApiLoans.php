@@ -96,6 +96,16 @@ class ApiLoans extends Controller
             $pending_query->where('member_id', (int) $member['id']);
         }
         $pending_count = $pending_query->count();
+        $status_query = 'SELECT status, COUNT(*) AS total FROM loans';
+        $status_params = [];
+        if ($member) {
+            $status_query .= ' WHERE member_id = ?';
+            $status_params[] = (int) $member['id'];
+        }
+        $status_counts = $this->db->raw(
+            $status_query . ' GROUP BY status ORDER BY status ASC',
+            $status_params
+        )->fetchAll(PDO::FETCH_ASSOC);
 
         $query = $this->db->table('loans l')
             ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
@@ -115,6 +125,7 @@ class ApiLoans extends Controller
         $this->api->respond([
             'loans' => $loans,
             'pending_count' => $pending_count,
+            'status_counts' => $status_counts,
             'pagination' => [
                 'page' => $pagination['page'],
                 'per_page' => $pagination['per_page'],
