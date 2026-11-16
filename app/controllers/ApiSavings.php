@@ -117,7 +117,10 @@ class ApiSavings extends Controller
                  FROM members m
                  LEFT JOIN savings_transactions s ON s.member_id = m.id
                  GROUP BY m.id, m.member_number, m.first_name, m.last_name, m.status
-                 ORDER BY m.last_name ASC, m.first_name ASC"
+                 ORDER BY
+                    CASE WHEN m.member_number REGEXP '^[0-9]+$' THEN 0 ELSE 1 END ASC,
+                    CAST(m.member_number AS UNSIGNED) ASC,
+                    m.member_number ASC"
             )->fetchAll(PDO::FETCH_ASSOC);
             $totals = ['credits' => 0, 'debits' => 0, 'balance' => 0];
             foreach ($member_balances as &$row) {

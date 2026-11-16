@@ -1,6 +1,8 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
+
 class ApiShareCapital extends Controller
 {
     private $api;
@@ -33,7 +35,7 @@ class ApiShareCapital extends Controller
              WHERE status = 'active' ORDER BY id DESC LIMIT 1"
         )->fetch(PDO::FETCH_ASSOC);
         $subscriptions = $this->db->raw(
-            "SELECT s.id, s.member_id, s.subscription_number, s.subscribed_shares, s.par_value,
+            "SELECT s.id, s.member_id, m.user_id AS owner_user_id, s.subscription_number, s.subscribed_shares, s.par_value,
                     s.subscribed_amount, s.subscription_date, s.status, s.created_at,
                     m.member_number, m.first_name, m.last_name,
                     COALESCE(p.paid_up_amount, 0) AS paid_up_amount,
@@ -437,6 +439,159 @@ class ApiShareCapital extends Controller
         ], 201);
     }
 
+    public function redeem_subscription($subscription_id = null)
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if (!in_array($user['role'], ['member', 'admin'], true)) {
+            $this->api->respond_error('Share-capital transfers are available to members and admin investors only.', 403);
+        }
+        $this->require_schema();
+        $subscription_id = filter_var($subscription_id, FILTER_VALIDATE_INT);
+        if (!$subscription_id || $subscription_id < 1) {
+            $this->api->respond_error('Choose a valid share subscription to transfer.', 422);
+        }
+        $this->api->rate_limit('share-capital-redemption:' . (int) $user['id'], 3, 3600);
+        $this->require_redemption_schema();
+
+        if ($user['role'] === 'member') {
+            $member = $this->member_profile($user);
+        } else {
+            $member = $this->Member_model->find_for_user((int) $user['id']);
+            if (!$member || $member['status'] !== 'active') {
+                $this->api->respond_error('An active admin investor profile is required for this transfer.', 403);
+            }
+        }
+
+        $amount = 0;
+        $reference = 'CW-SHR-TO-SAV-' . strtoupper(bin2hex(random_bytes(12)));
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
+            $subscription = $this->db->raw(
+                'SELECT id, member_id, subscription_number, subscribed_amount, status
+                 FROM share_capital_subscriptions WHERE id = ? FOR UPDATE',
+                [(int) $subscription_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$subscription || (int) $subscription['member_id'] !== (int) $member['id']) {
+                throw new DomainException('The selected subscription does not belong to this account.');
+            }
+            if ($subscription['status'] !== 'active') {
+                throw new DomainException('Only an active, fully paid share subscription can be transferred.');
+            }
+            $pending = $this->db->raw(
+                "SELECT COUNT(*) AS total FROM payment_transactions
+                 WHERE subscription_id = ? AND status IN ('pending', 'needs_review')",
+                [(int) $subscription['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            if ((int) ($pending['total'] ?? 0) > 0) {
+                throw new DomainException('Resolve pending payments before transferring this subscription.');
+            }
+
+            $paid_cents = $this->net_paid_cents((int) $subscription['id']);
+            $subscribed_cents = self::money_to_cents((string) $subscription['subscribed_amount']);
+            if ($paid_cents < 1 || $paid_cents !== $subscribed_cents) {
+                throw new DomainException('Only a fully paid subscription can be transferred to savings.');
+            }
+
+            $payments = $this->db->raw(
+                "SELECT t.id, t.amount FROM share_capital_transactions t
+                 WHERE t.subscription_id = ? AND t.transaction_type = 'payment'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM share_capital_transactions r
+                       WHERE r.reverses_transaction_id = t.id
+                   )
+                 ORDER BY t.id ASC FOR UPDATE",
+                [(int) $subscription['id']]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $payment_total = 0;
+            foreach ($payments as $payment) {
+                $payment_total += self::money_to_cents((string) $payment['amount']);
+            }
+            if ($payment_total !== $paid_cents) {
+                throw new DomainException('This subscription has a prior correction and cannot be transferred as a single balance.');
+            }
+
+            $loan_capacity = cooperativeAvailableLoanCapital($this->db)['available'];
+            if ($paid_cents > $loan_capacity) {
+                throw new DomainException('This share capital is currently committed to cooperative lending and cannot yet be transferred.');
+            }
+
+            $remaining_cents = $paid_cents;
+            foreach ($payments as $payment) {
+                $payment_cents = self::money_to_cents((string) $payment['amount']);
+                $remaining_cents -= $payment_cents;
+                $inserted = $this->db->table('share_capital_transactions')->insert([
+                    'member_id' => (int) $member['id'],
+                    'subscription_id' => (int) $subscription['id'],
+                    'transaction_type' => 'reversal',
+                    'amount' => self::format_cents($payment_cents),
+                    'balance_after' => self::format_cents($remaining_cents),
+                    'transaction_reference' => 'CW-SHR-RED-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)),
+                    'payment_method' => null,
+                    'reverses_transaction_id' => (int) $payment['id'],
+                    'description' => 'Share-capital redemption transferred to savings.',
+                    'created_by_user_id' => (int) $user['id']
+                ]);
+                if (!$inserted) {
+                    throw new RuntimeException('The share-capital redemption record could not be saved.');
+                }
+            }
+
+            $savings = $this->db->raw(
+                "SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END), 0) AS total
+                 FROM savings_transactions WHERE member_id = ?",
+                [(int) $member['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            $savings_balance = self::money_to_cents((string) ($savings['total'] ?? '0.00'));
+            if ($savings_balance === false) {
+                throw new RuntimeException('The member savings balance is invalid and could not be updated safely.');
+            }
+            $savings_transaction_id = $this->db->table('savings_transactions')->insert([
+                'member_id' => (int) $member['id'],
+                'type' => 'deposit',
+                'amount' => self::format_cents($paid_cents),
+                'balance_after' => self::format_cents($savings_balance + $paid_cents),
+                'reference_no' => $reference,
+                'description' => 'Share-capital redemption transferred to savings.',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$savings_transaction_id) {
+                throw new RuntimeException('The transferred amount could not be credited to savings.');
+            }
+
+            $updated = $this->db->table('share_capital_subscriptions')
+                ->where('id', (int) $subscription['id'])
+                ->where('status', 'active')
+                ->update(['status' => 'cancelled']);
+            if ($updated !== 1) {
+                throw new DomainException('The subscription status changed before the transfer could be completed.');
+            }
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'share_capital_transferred_to_savings', [
+                'member_id' => (int) $member['id'],
+                'subscription_id' => (int) $subscription['id'],
+                'amount' => self::format_cents($paid_cents),
+                'savings_reference' => $reference
+            ]);
+            $this->db->commit();
+            $amount = $paid_cents;
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise share-capital transfer to savings failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => 'The fully paid share subscription was transferred to savings. The contribution and savings ledgers were updated.',
+            'amount' => self::format_cents($amount),
+            'reference' => $reference
+        ]);
+    }
+
     public function reverse_payment($transaction_id = null)
     {
         $this->api->require_method('POST');
@@ -554,6 +709,32 @@ class ApiShareCapital extends Controller
             error_log('CoopWise share capital schema is missing; apply database/coopwise_share_capital_upgrade.sql.');
             $this->api->respond_error(
                 'Share capital is not configured in the database yet. Apply database/coopwise_share_capital_upgrade.sql in Navicat, then retry.',
+                503
+            );
+        }
+    }
+
+    private function require_redemption_schema()
+    {
+        $required_tables = [
+            'activity_logs',
+            'cooperative_policies',
+            'loan_payments',
+            'loan_schedules',
+            'loans',
+            'payment_transactions',
+            'savings_transactions'
+        ];
+        $placeholders = implode(',', array_fill(0, count($required_tables), '?'));
+        $found = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name IN ($placeholders)",
+            $required_tables
+        )->fetchColumn();
+        if ((int) $found !== count($required_tables)) {
+            error_log('CoopWise share-capital transfer schema is incomplete.');
+            $this->api->respond_error(
+                'Share-capital transfers are not fully configured in the database.',
                 503
             );
         }

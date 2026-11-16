@@ -45,8 +45,30 @@ class ApiCooperativeFinance extends Controller
             )->fetch(PDO::FETCH_ASSOC)['total'] ?? '0.00')));
         }
 
+        $member = null;
         if ($user['role'] === 'member') {
             $member = $this->member_profile($user);
+        } elseif ($user['role'] === 'admin') {
+            $linked_member = $this->Member_model->find_for_user((int) $user['id']);
+            if ($linked_member && $linked_member['status'] === 'active') {
+                $member = $linked_member;
+            }
+        }
+        if ($member) {
+            if ($user['role'] === 'admin') {
+                $result['member_profile'] = [
+                    'member_id' => (int) $member['id'],
+                    'member_number' => $member['member_number']
+                ];
+                $savings = $this->db->raw(
+                    "SELECT COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END), 0) AS balance
+                     FROM savings_transactions WHERE member_id = ?",
+                    [(int) $member['id']]
+                )->fetch(PDO::FETCH_ASSOC);
+                $result['member_savings_balance'] = self::format_cents(
+                    self::money_to_cents((string) ($savings['balance'] ?? '0.00'))
+                );
+            }
             $result['member_returns'] = $this->db->raw(
                 "SELECT r.id, r.distribution_id, d.fiscal_year, r.paid_up_share_capital,
                         r.patronage_basis, r.interest_on_share_capital, r.patronage_refund,
@@ -65,6 +87,9 @@ class ApiCooperativeFinance extends Controller
     {
         $this->api->require_method('POST');
         $user = $this->authenticated_user();
+        if (!in_array($user['role'], ['member', 'admin'], true)) {
+            $this->api->respond_error('Only a member or the admin’s own investor account can claim member returns.', 403);
+        }
         $this->require_finance_schema();
         $member = $this->member_profile($user);
         $destination = $this->api->body()['destination'] ?? '';

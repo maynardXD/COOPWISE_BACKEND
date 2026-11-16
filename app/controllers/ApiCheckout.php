@@ -94,7 +94,7 @@ class ApiCheckout extends Controller
             $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
         }
         if ($purpose === 'savings' && ($payment_method !== 'xendit' || self::xendit_mode() !== 'test')) {
-            $this->api->respond_error('Savings deposits are available only through Xendit Test Mode.', 403);
+            $this->api->respond_error('Online savings deposits are not available for this transaction.', 403);
         }
         if ($payment_method === 'savings' && $purpose === 'savings') {
             $this->api->respond_error('A savings deposit cannot be funded from the savings balance.', 422);
@@ -777,7 +777,7 @@ class ApiCheckout extends Controller
                 switch ($payment['purpose']) {
                     case 'savings':
                         if (self::xendit_mode() !== 'test') {
-                            throw new DomainException('Savings deposits can only be applied from Xendit Test Mode.');
+                            throw new DomainException('This savings deposit cannot be applied through the current payment provider.');
                         }
                         $this->apply_savings_deposit($payment);
                         break;
@@ -928,7 +928,7 @@ class ApiCheckout extends Controller
             'amount' => self::format_cents($amount),
             'balance_after' => self::format_cents($balance + $amount),
             'reference_no' => (string) $payment['reference_no'],
-            'description' => 'Xendit Test Mode deposit confirmed by provider',
+            'description' => 'Online savings deposit confirmed by payment provider.',
             'created_by_user_id' => null
         ]);
         if (!$inserted) {
