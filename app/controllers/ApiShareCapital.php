@@ -28,11 +28,18 @@ class ApiShareCapital extends Controller
 
         $where = $member ? 'WHERE s.member_id = ?' : '';
         $params = $member ? [(int) $member['id']] : [];
+        $share_par_value = $this->db->raw(
+            "SELECT par_value FROM share_capital_subscriptions
+             WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+        )->fetch(PDO::FETCH_ASSOC);
         $subscriptions = $this->db->raw(
             "SELECT s.id, s.member_id, s.subscription_number, s.subscribed_shares, s.par_value,
                     s.subscribed_amount, s.subscription_date, s.status, s.created_at,
                     m.member_number, m.first_name, m.last_name,
-                    COALESCE(p.paid_up_amount, 0) AS paid_up_amount
+                    COALESCE(p.paid_up_amount, 0) AS paid_up_amount,
+                    COALESCE((SELECT SUM(pt.amount) FROM payment_transactions pt
+                              WHERE pt.subscription_id = s.id
+                                AND pt.status IN ('pending', 'needs_review')), 0) AS pending_payment_amount
              FROM share_capital_subscriptions s
              INNER JOIN members m ON m.id = s.member_id
              LEFT JOIN (
@@ -73,11 +80,17 @@ class ApiShareCapital extends Controller
             $subscription['subscribed_amount'] = self::format_cents(self::money_to_cents((string) $subscription['subscribed_amount']));
             $subscription['par_value'] = self::format_cents(self::money_to_cents((string) $subscription['par_value']));
             $subscription['paid_up_amount'] = self::format_cents(self::money_to_cents((string) $subscription['paid_up_amount']));
-            $subscription['unpaid_amount'] = self::format_cents(
-                self::money_to_cents($subscription['subscribed_amount']) - self::money_to_cents($subscription['paid_up_amount'])
+            $subscription['pending_payment_amount'] = self::format_cents(
+                self::money_to_cents((string) $subscription['pending_payment_amount'])
             );
-            $subscribed_cents += self::money_to_cents($subscription['subscribed_amount']);
-            $paid_up_cents += self::money_to_cents($subscription['paid_up_amount']);
+            $unpaid_cents = $subscription['status'] === 'cancelled'
+                ? 0
+                : self::money_to_cents($subscription['subscribed_amount']) - self::money_to_cents($subscription['paid_up_amount']);
+            $subscription['unpaid_amount'] = self::format_cents($unpaid_cents);
+            if ($subscription['status'] !== 'cancelled') {
+                $subscribed_cents += self::money_to_cents($subscription['subscribed_amount']);
+                $paid_up_cents += self::money_to_cents($subscription['paid_up_amount']);
+            }
         }
         unset($subscription);
 
@@ -102,6 +115,9 @@ class ApiShareCapital extends Controller
                 'has_more' => $has_more
             ],
             'members' => $members,
+            'share_par_value' => $share_par_value
+                ? self::format_cents(self::money_to_cents((string) $share_par_value['par_value']))
+                : null,
             'summary' => [
                 'subscribed_amount' => self::format_cents($subscribed_cents),
                 'paid_up_amount' => self::format_cents($paid_up_cents),
@@ -166,6 +182,145 @@ class ApiShareCapital extends Controller
         }
 
         $this->api->respond(['message' => 'Share capital subscription created.', 'id' => (int) $id], 201);
+    }
+
+    public function member_contribution()
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if ($user['role'] !== 'member') {
+            $this->api->respond_error('Share capital contributions from this form are available to member accounts only.', 403);
+        }
+        $member = $this->member_profile($user);
+        $this->require_schema();
+
+        $data = $this->api->body();
+        $amount = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
+        if ($amount === false || $amount < 1 || $amount > 999999999999) {
+            $this->api->respond_error('Enter a contribution amount from PHP 0.01 to PHP 9,999,999,999.99.', 422);
+        }
+
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
+            $par_value = $this->db->raw(
+                "SELECT par_value FROM share_capital_subscriptions
+                 WHERE status = 'active' ORDER BY id DESC LIMIT 1 FOR UPDATE"
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$par_value) {
+                $this->db->roll_back();
+                $this->api->respond_error(
+                    'Share-capital terms are not configured. Ask cooperative staff to record an approved share subscription first.',
+                    409
+                );
+            }
+            $par_cents = self::money_to_cents((string) $par_value['par_value']);
+            if ($par_cents === false || $par_cents < 1) {
+                throw new RuntimeException('The cooperative share par value is invalid.');
+            }
+            $shares = intdiv($amount + $par_cents - 1, $par_cents);
+            $subscribed_cents = $shares * $par_cents;
+            if ($shares > 999999999 || $subscribed_cents > 999999999999) {
+                $this->db->roll_back();
+                $this->api->respond_error('The requested share-capital contribution exceeds the supported subscription limit.', 422);
+            }
+            $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
+            $subscription_id = $this->db->table('share_capital_subscriptions')->insert([
+                'member_id' => (int) $member['id'],
+                'subscription_number' => 'CW-SHR-MEMBER-' . bin2hex(random_bytes(10)),
+                'subscribed_shares' => $shares,
+                'par_value' => self::format_cents($par_cents),
+                'subscribed_amount' => self::format_cents($subscribed_cents),
+                'subscription_date' => date('Y-m-d'),
+                'status' => 'active',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$subscription_id) {
+                throw new RuntimeException('The share-capital contribution subscription could not be created.');
+            }
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'member_contribution_started', [
+                'member_id' => (int) $member['id'],
+                'subscription_id' => (int) $subscription_id,
+                'amount' => self::format_cents($amount)
+            ]);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise member share-capital contribution setup failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => 'Share-capital subscription created. Continue to payment to complete the contribution.',
+            'subscription_id' => (int) $subscription_id,
+            'payment_amount' => self::format_cents($amount),
+            'subscribed_amount' => self::format_cents($subscribed_cents),
+            'unpaid_amount' => self::format_cents($subscribed_cents - $amount)
+        ], 201);
+    }
+
+    public function cancel_subscription($subscription_id = null)
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        $this->require_schema();
+        $subscription_id = filter_var($subscription_id, FILTER_VALIDATE_INT);
+        if (!$subscription_id || $subscription_id < 1) {
+            $this->api->respond_error('Choose a valid share subscription to cancel.', 422);
+        }
+        $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
+        if (!$member) {
+            $this->require_staff($user);
+        }
+
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
+            $subscription = $this->db->raw(
+                'SELECT id, member_id, subscription_number, status
+                 FROM share_capital_subscriptions WHERE id = ? FOR UPDATE',
+                [(int) $subscription_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$subscription || ($member && (int) $subscription['member_id'] !== (int) $member['id'])) {
+                throw new DomainException('The share subscription was not found for this account.');
+            }
+            if ($subscription['status'] !== 'active') {
+                throw new DomainException('Only an active unpaid share subscription can be cancelled.');
+            }
+            if ($this->net_paid_cents((int) $subscription_id) > 0) {
+                throw new DomainException('A subscription with a paid contribution cannot be cancelled.');
+            }
+            $pending = $this->db->raw(
+                "SELECT COUNT(*) AS total FROM payment_transactions
+                 WHERE subscription_id = ? AND status IN ('pending', 'needs_review')",
+                [(int) $subscription_id]
+            )->fetch(PDO::FETCH_ASSOC);
+            if ((int) ($pending['total'] ?? 0) > 0) {
+                throw new DomainException('Cancel or resolve the pending payment before cancelling this subscription.');
+            }
+            $updated = $this->db->table('share_capital_subscriptions')
+                ->where('id', (int) $subscription_id)
+                ->where('status', 'active')
+                ->update(['status' => 'cancelled']);
+            if ($updated !== 1) {
+                throw new DomainException('The share subscription could not be cancelled.');
+            }
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'unpaid_subscription_cancelled', [
+                'subscription_id' => (int) $subscription_id,
+                'subscription_number' => $subscription['subscription_number'],
+                'member_id' => (int) $subscription['member_id']
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise share-capital subscription cancellation failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond(['message' => 'Unpaid share subscription cancelled.']);
     }
 
     public function admin_investment()

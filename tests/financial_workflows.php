@@ -134,6 +134,11 @@ $simulatedMembershipDays = new ReflectionFunction('cooperativeSimulatedMembershi
 assertSameValue(0, $simulatedMembershipDays->invoke(5), 'A simulated membership day should not complete before six seconds');
 assertSameValue(1, $simulatedMembershipDays->invoke(6), 'One simulated membership day should complete after six seconds');
 assertSameValue(30, $simulatedMembershipDays->invoke(180), 'The default 30-day membership requirement should take three minutes in the demo');
+assertSameValue(30, $simulatedMembershipDays->invoke(189), 'The 31st accelerated membership day should not finish before 3:10');
+assertSameValue(31, $simulatedMembershipDays->invoke(190), 'The 31-day membership requirement should finish after 3 minutes and 10 seconds');
+assertSameValue(180, cooperativeMembershipRequiredSeconds(30), 'The default 30-day membership requirement should take three minutes');
+assertSameValue(190, cooperativeMembershipRequiredSeconds(31), 'A 31-day membership policy should display a 3:10 waiting time');
+assertSameValue(200, cooperativeMembershipRequiredSeconds(32), 'Each membership day after day 30 should add ten seconds');
 $ineligible = cooperativeLoanEligibility(400000, 0, 0, 20, false, true, 500000, 0, 30, 1.0);
 assertSameValue(false, $ineligible['eligible'], 'Members below configured share and membership thresholds should not be eligible');
 assertSameValue(2, count($ineligible['reasons']), 'Eligibility should explain each unmet sample-policy requirement');

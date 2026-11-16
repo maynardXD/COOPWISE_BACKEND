@@ -727,7 +727,12 @@ class ApiAuth extends Controller
                     'first_name' => $member['first_name'],
                     'middle_name' => $member['middle_name'],
                     'last_name' => $member['last_name'],
-                    'status' => $member['status']
+                    'status' => $member['status'],
+                    'is_investor' => (float) $this->db->raw(
+                        "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END), 0) AS paid_up_amount
+                         FROM share_capital_transactions WHERE member_id = ?",
+                        [(int) $member['id']]
+                    )->fetch(PDO::FETCH_ASSOC)['paid_up_amount'] > 0
                 ];
             }
         }

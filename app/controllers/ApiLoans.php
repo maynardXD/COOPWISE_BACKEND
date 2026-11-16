@@ -875,7 +875,9 @@ class ApiLoans extends Controller
                 'minimum_paid_up_share_capital' => self::format_cents(self::money_to_cents((string) $policies['minimum_paid_up_share_capital'])),
                 'minimum_savings_balance' => self::format_cents(self::money_to_cents((string) $policies['minimum_savings_balance'])),
                 'minimum_membership_days' => (int) $policies['minimum_membership_days'],
-                'membership_required_seconds' => (int) $policies['minimum_membership_days'] * 6,
+                'membership_required_seconds' => cooperativeMembershipRequiredSeconds(
+                    (int) $policies['minimum_membership_days']
+                ),
                 'loan_to_paid_up_share_capital_multiplier' => (float) $policies['loan_to_paid_up_share_capital_multiplier']
             ],
             'reasons' => $eligibility['reasons']

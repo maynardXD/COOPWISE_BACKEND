@@ -71,7 +71,22 @@ function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecond
     if ($elapsedSeconds < 0 || $realSecondsPerDay < 1) {
         throw new InvalidArgumentException('Simulated membership time must be non-negative.');
     }
-    return intdiv($elapsedSeconds, $realSecondsPerDay);
+    $firstPeriodSeconds = 30 * $realSecondsPerDay;
+    if ($elapsedSeconds <= $firstPeriodSeconds) {
+        return intdiv($elapsedSeconds, $realSecondsPerDay);
+    }
+    return 30 + intdiv($elapsedSeconds - $firstPeriodSeconds, 10);
+}
+
+function cooperativeMembershipRequiredSeconds(int $membershipDays, int $realSecondsPerDay = 6): int
+{
+    if ($membershipDays < 0 || $realSecondsPerDay < 1) {
+        throw new InvalidArgumentException('The membership requirement must be non-negative.');
+    }
+    if ($membershipDays <= 30) {
+        return $membershipDays * $realSecondsPerDay;
+    }
+    return (30 * $realSecondsPerDay) + (($membershipDays - 30) * 10);
 }
 
 function cooperativeLoanEligibility(
