@@ -168,6 +168,120 @@ class ApiShareCapital extends Controller
         $this->api->respond(['message' => 'Share capital subscription created.', 'id' => (int) $id], 201);
     }
 
+    public function admin_investment()
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        if ($user['role'] !== 'admin') {
+            $this->api->respond_error('This investment option is available to the admin account only.', 403);
+        }
+        $this->require_schema();
+
+        $data = $this->api->body();
+        $shares = filter_var($data['subscribed_shares'] ?? null, FILTER_VALIDATE_INT);
+        $par_value = self::money_to_cents(trim((string) ($data['par_value'] ?? '')));
+        $payment_method = trim((string) ($data['payment_method'] ?? 'cash'));
+        if (!$shares || $shares < 1 || $shares > 999999999 || $par_value === false || $par_value < 1
+            || !in_array($payment_method, ['simulation', 'cash', 'bank', 'gcash', 'check'], true)) {
+            $this->api->respond_error('Enter a positive share count and par value, and choose a supported payment method.', 422);
+        }
+        if ($par_value > intdiv(999999999999, $shares)) {
+            $this->api->respond_error('The investment amount is above the supported maximum.', 422);
+        }
+
+        $amount = $shares * $par_value;
+        $this->db->transaction();
+        try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
+            $locked_user = $this->db->raw(
+                'SELECT id, email, full_name FROM users WHERE id = ? AND role = ? AND status = ? FOR UPDATE',
+                [(int) $user['id'], 'admin', 'active']
+            )->fetch(PDO::FETCH_ASSOC);
+            if (!$locked_user) {
+                throw new DomainException('The active admin account could not be verified.');
+            }
+
+            $member = $this->db->raw(
+                'SELECT id, status FROM members WHERE user_id = ? FOR UPDATE',
+                [(int) $locked_user['id']]
+            )->fetch(PDO::FETCH_ASSOC);
+            if ($member && $member['status'] !== 'active') {
+                throw new DomainException('The admin account has an inactive member profile and cannot invest.');
+            }
+            if (!$member) {
+                $name_parts = preg_split('/\s+/', trim((string) $locked_user['full_name']), -1, PREG_SPLIT_NO_EMPTY);
+                $first_name = array_shift($name_parts) ?: 'Admin';
+                $last_name = $name_parts ? implode(' ', $name_parts) : $first_name;
+                $member_id = $this->db->table('members')->insert([
+                    'user_id' => (int) $locked_user['id'],
+                    'member_number' => 'STAFF-' . str_pad((string) $locked_user['id'], 10, '0', STR_PAD_LEFT),
+                    'first_name' => substr($first_name, 0, 100),
+                    'last_name' => substr($last_name, 0, 100),
+                    'email' => $locked_user['email'],
+                    'status' => 'active'
+                ]);
+                if (!$member_id) {
+                    throw new RuntimeException('An investor profile could not be created for the admin account.');
+                }
+                $member = ['id' => (int) $member_id, 'status' => 'active'];
+            }
+
+            $subscription_id = $this->db->table('share_capital_subscriptions')->insert([
+                'member_id' => (int) $member['id'],
+                'subscription_number' => 'CW-SHR-ADMIN-' . bin2hex(random_bytes(10)),
+                'subscribed_shares' => (int) $shares,
+                'par_value' => self::format_cents($par_value),
+                'subscribed_amount' => self::format_cents($amount),
+                'subscription_date' => date('Y-m-d'),
+                'status' => 'active',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$subscription_id) {
+                throw new RuntimeException('The admin share-capital subscription could not be saved.');
+            }
+            $reference = 'CW-ADMIN-SHR-' . strtoupper(bin2hex(random_bytes(10)));
+            $transaction_id = $this->db->table('share_capital_transactions')->insert([
+                'member_id' => (int) $member['id'],
+                'subscription_id' => (int) $subscription_id,
+                'transaction_type' => 'payment',
+                'amount' => self::format_cents($amount),
+                'balance_after' => self::format_cents($amount),
+                'transaction_reference' => $reference,
+                'payment_method' => $payment_method,
+                'description' => 'Admin account share-capital investment recorded by the admin.',
+                'created_by_user_id' => (int) $user['id']
+            ]);
+            if (!$transaction_id) {
+                throw new RuntimeException('The admin share-capital payment could not be recorded.');
+            }
+            $this->write_activity_log((int) $user['id'], 'share_capital', 'admin_investment_recorded', [
+                'member_id' => (int) $member['id'],
+                'subscription_id' => (int) $subscription_id,
+                'transaction_id' => (int) $transaction_id,
+                'shares' => (int) $shares,
+                'amount' => self::format_cents($amount),
+                'payment_method' => $payment_method,
+                'reference' => $reference
+            ]);
+            $this->db->commit();
+        } catch (DomainException $error) {
+            $this->db->roll_back();
+            $this->api->respond_error($error->getMessage(), 409);
+        } catch (Throwable $error) {
+            $this->db->roll_back();
+            error_log('CoopWise admin share-capital investment failed: ' . $error->getMessage());
+            throw $error;
+        }
+
+        $this->api->respond([
+            'message' => 'The admin account share-capital subscription and payment were recorded. This account remains limited to its admin role.',
+            'subscription_id' => (int) $subscription_id,
+            'transaction_id' => (int) $transaction_id,
+            'amount' => self::format_cents($amount),
+            'reference' => $reference
+        ], 201);
+    }
+
     public function reverse_payment($transaction_id = null)
     {
         $this->api->require_method('POST');

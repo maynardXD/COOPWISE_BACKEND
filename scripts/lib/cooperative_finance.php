@@ -16,6 +16,11 @@ function cooperativeFormatCents(int $amount): string
     return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
 }
 
+function cooperativeAvailableRepayment(int $balance, int $reservedPayments): int
+{
+    return max(0, $balance - max(0, $reservedPayments));
+}
+
 function cooperativeLoanCapitalCapacity(
     int $paidUpShareCapital,
     int $collectedInterest,

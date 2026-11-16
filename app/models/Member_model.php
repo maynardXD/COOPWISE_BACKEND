@@ -31,13 +31,12 @@ class Member_model extends Model
 
     public function next_member_number()
     {
-        $latest = $this->db->table($this->table)
-            ->select('member_number')
-            ->order_by('id', 'DESC')
-            ->limit(1)
-            ->get();
-
-        $next = $latest ? ((int) $latest['member_number'] + 1) : 1;
+        $latest = $this->db->raw(
+            "SELECT COALESCE(MAX(CAST(member_number AS UNSIGNED)), 0) AS member_number
+             FROM {$this->table}
+             WHERE member_number REGEXP '^[0-9]+$'"
+        )->fetch(PDO::FETCH_ASSOC);
+        $next = (int) ($latest['member_number'] ?? 0) + 1;
         return str_pad((string) $next, 6, '0', STR_PAD_LEFT);
     }
 }

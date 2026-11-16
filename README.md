@@ -71,6 +71,10 @@ reuse its branding, images, or website copy.
    repayments can be paid in full from the payment form, while staff can record
    payments already received; pending online checkout amounts remain reserved
    and cannot be double-counted.
+   The admin can also record a personal investment from the Share Capital
+   screen. If the admin has no linked investor profile, one is created for
+   share-capital accounting only; the admin role does not gain member savings
+   or loan access.
    For this classroom simulation only, each configured membership day passes
    in six real seconds; the default 30-day eligibility period therefore takes
    three minutes. This accelerated clock is not suitable for real cooperative

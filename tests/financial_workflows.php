@@ -128,6 +128,8 @@ assertSameValue(0, cooperativeLoanCapitalCapacity(5000, 0, 5000), 'A fully lent 
 assertSameValue(2000, cooperativeLoanCapitalCapacity(5000, 0, 3000), 'Principal repayments should restore available loan capacity');
 assertSameValue(6000, cooperativeLoanCapitalCapacity(5000, 1000, 0), 'Collected loan interest should increase cooperative loan capacity');
 assertSameValue(0, cooperativeLoanCapitalCapacity(5000, 0, 0, 5000), 'Pending applications should reserve available loan capacity');
+assertSameValue(7500, cooperativeAvailableRepayment(10000, 2500), 'A pending checkout should reserve part of the loan balance');
+assertSameValue(0, cooperativeAvailableRepayment(10000, 12000), 'Reserved payments should not make available repayment negative');
 $simulatedMembershipDays = new ReflectionFunction('cooperativeSimulatedMembershipDays');
 assertSameValue(0, $simulatedMembershipDays->invoke(5), 'A simulated membership day should not complete before six seconds');
 assertSameValue(1, $simulatedMembershipDays->invoke(6), 'One simulated membership day should complete after six seconds');

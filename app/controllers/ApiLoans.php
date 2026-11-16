@@ -304,11 +304,7 @@ class ApiLoans extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
 
         $query = $this->db->table('loans l')
-            ->select("l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid,
-                      GREATEST(l.current_balance - COALESCE((SELECT SUM(pt.amount) FROM payment_transactions pt
-                          WHERE pt.loan_id = l.id AND pt.status IN ('pending', 'needs_review')), 0), 0) AS available_repayment_amount,
-                      l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at,
-                      lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name")
+            ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
             ->inner_join('members m', 'm.id = l.member_id');
         if ($member) {
@@ -318,6 +314,31 @@ class ApiLoans extends Controller
         $loans = $query->order_by('l.created_at', 'DESC')
             ->limit($pagination['offset'], $pagination['per_page'] + 1)
             ->get_all();
+        if ($loans) {
+            $loan_ids = array_map(static function (array $loan): int {
+                return (int) $loan['id'];
+            }, $loans);
+            $placeholders = implode(',', array_fill(0, count($loan_ids), '?'));
+            $pending_payments = $this->db->raw(
+                "SELECT loan_id, COALESCE(SUM(amount), 0) AS total
+                 FROM payment_transactions
+                 WHERE loan_id IN ({$placeholders}) AND status IN ('pending', 'needs_review')
+                 GROUP BY loan_id",
+                $loan_ids
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $reserved_by_loan = [];
+            foreach ($pending_payments as $pending_payment) {
+                $reserved_by_loan[(int) $pending_payment['loan_id']] =
+                    self::money_to_cents((string) $pending_payment['total']);
+            }
+            foreach ($loans as &$loan) {
+                $loan['available_repayment_amount'] = self::format_cents(cooperativeAvailableRepayment(
+                    self::money_to_cents((string) $loan['current_balance']),
+                    $reserved_by_loan[(int) $loan['id']] ?? 0
+                ));
+            }
+            unset($loan);
+        }
         $has_more = count($loans) > $pagination['per_page'];
         if ($has_more) {
             array_pop($loans);

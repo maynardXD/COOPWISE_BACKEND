@@ -74,6 +74,7 @@ class ApiCooperativeFinance extends Controller
 
         $this->db->transaction();
         try {
+            $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
             $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
             $returns = $this->db->raw(
                 "SELECT r.id, r.total_return
