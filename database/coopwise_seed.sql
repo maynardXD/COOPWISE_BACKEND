@@ -1,3 +1,4 @@
+-- This file adds the starter records used by a new CoopWise database.
 -- No default administrator credentials are seeded.
 -- Register an account, then assign the first cooperative administrator
 -- directly in your trusted database console after verifying its email:

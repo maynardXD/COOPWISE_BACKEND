@@ -1,4 +1,6 @@
 <?php
+// This file handles sign-in, registration, sessions, and password reset.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiAuth extends Controller
@@ -6,6 +8,7 @@ class ApiAuth extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -15,6 +18,7 @@ class ApiAuth extends Controller
         $this->call->model('User_model');
     }
 
+    // This method checks the login details and signs the user in.
     public function login()
     {
         $this->api->require_method('POST');
@@ -39,6 +43,7 @@ class ApiAuth extends Controller
         $this->respond_with_session($user, 'Signed in successfully.');
     }
 
+    // This method returns the sign-in settings needed by the frontend.
     public function config()
     {
         $this->api->require_method('GET');
@@ -54,6 +59,7 @@ class ApiAuth extends Controller
         ]);
     }
 
+    // This method checks the Google sign-in token and opens the account.
     public function google_login()
     {
         $this->api->require_method('POST');
@@ -97,6 +103,7 @@ class ApiAuth extends Controller
         $this->respond_with_session($user, 'Signed in with Google.');
     }
 
+    // This method checks the refresh token and creates a new access token.
     public function refresh()
     {
         $this->api->require_method('POST');
@@ -122,6 +129,7 @@ class ApiAuth extends Controller
         ]);
     }
 
+    // This method ends the signed-in session.
     public function logout()
     {
         $this->api->require_method('POST');
@@ -134,6 +142,7 @@ class ApiAuth extends Controller
         $this->api->respond(['message' => 'Signed out.']);
     }
 
+    // This method saves that the new user accepted the current terms.
     public function accept_terms()
     {
         $this->api->require_method('POST');
@@ -162,6 +171,7 @@ class ApiAuth extends Controller
         $this->api->respond(['message' => 'Your acceptance has been recorded.']);
     }
 
+    // This method checks and saves a new account.
     public function register()
     {
         $this->api->require_method('POST');
@@ -191,6 +201,7 @@ class ApiAuth extends Controller
         ], 201);
     }
 
+    // This method creates and emails a one-time password reset code.
     public function request_password_reset()
     {
         $this->api->require_method('POST');
@@ -271,6 +282,7 @@ class ApiAuth extends Controller
         $this->api->respond(['message' => 'If an active account uses that email, a password-reset code will be sent.']);
     }
 
+    // This method checks the reset code and saves the new password.
     public function confirm_password_reset()
     {
         $this->api->require_method('POST');
@@ -345,6 +357,7 @@ class ApiAuth extends Controller
         $this->api->respond(['message' => 'Password changed. Sign in with your new password.']);
     }
 
+    // This method sends reset email.
     private function send_reset_email(string $email, string $full_name, string $otp, string $sender_email, string $sender_name)
     {
         $payload = json_encode([
@@ -392,6 +405,7 @@ class ApiAuth extends Controller
         }
     }
 
+    // This method sends the signed-in account and tokens to the frontend.
     private function respond_with_session(array $user, string $message)
     {
         $this->require_refresh_token_schema();
@@ -432,6 +446,7 @@ class ApiAuth extends Controller
         ]);
     }
 
+    // This method checks turnstile.
     private function verify_turnstile(array $data, string $expected_action)
     {
         $site_key = trim((string) getenv('COOPWISE_TURNSTILE_SITE_KEY'));
@@ -479,6 +494,7 @@ class ApiAuth extends Controller
         }
     }
 
+    // This method lists the website addresses allowed to use the security check.
     private function allowed_turnstile_hostnames(): array
     {
         $configured = trim((string) getenv('COOPWISE_TURNSTILE_HOSTNAMES'));
@@ -510,6 +526,7 @@ class ApiAuth extends Controller
         ))));
     }
 
+    // This method checks the response from the sign-in security check.
     public static function turnstile_response_is_valid(array $response, string $expected_action, array $allowed_hostnames): bool
     {
         if (($response['success'] ?? false) !== true
@@ -528,6 +545,7 @@ class ApiAuth extends Controller
         return $hostname !== '' && in_array($hostname, $allowed, true);
     }
 
+    // This method checks google id token.
     private function verify_google_id_token(string $id_token, string $client_id): ?array
     {
         $parts = explode('.', $id_token);
@@ -565,6 +583,7 @@ class ApiAuth extends Controller
         return self::google_claims_are_valid($claims, $client_id) ? $claims : null;
     }
 
+    // This method loads Google's public keys used to check sign-in tokens.
     private function google_signing_keys(bool $force_refresh = false): array
     {
         $cache_path = sys_get_temp_dir() . DIRECTORY_SEPARATOR
@@ -622,6 +641,7 @@ class ApiAuth extends Controller
         }
     }
 
+    // This method finds google signing key.
     private static function find_google_signing_key(array $keys, string $kid): ?array
     {
         foreach ($keys as $key) {
@@ -635,6 +655,7 @@ class ApiAuth extends Controller
         return null;
     }
 
+    // This method converts a Google key into the format used to check a token.
     private static function google_rsa_public_key(array $jwk)
     {
         $modulus = self::base64url_decode((string) ($jwk['n'] ?? ''));
@@ -656,6 +677,7 @@ class ApiAuth extends Controller
         return openssl_pkey_get_public($pem);
     }
 
+    // This method checks the account details inside a Google sign-in token.
     private static function google_claims_are_valid(array $claims, string $client_id): bool
     {
         $now = time();
@@ -681,6 +703,7 @@ class ApiAuth extends Controller
         return true;
     }
 
+    // This method decodes text from a Google sign-in token.
     private static function base64url_decode(string $value)
     {
         if ($value === '' || !preg_match('/^[A-Za-z0-9_-]+$/D', $value)) {
@@ -690,11 +713,13 @@ class ApiAuth extends Controller
         return $decoded === false ? false : $decoded;
     }
 
+    // This method reads a signed token's sequence of values.
     private static function der_sequence(string $value): string
     {
         return self::der_value(0x30, $value);
     }
 
+    // This method reads an integer from a signed token.
     private static function der_integer(string $value): string
     {
         $value = ltrim($value, "\0");
@@ -706,6 +731,7 @@ class ApiAuth extends Controller
         return self::der_value(0x02, $value);
     }
 
+    // This method reads one value from a signed token.
     private static function der_value(int $tag, string $value): string
     {
         $length = strlen($value);
@@ -721,6 +747,7 @@ class ApiAuth extends Controller
         return chr($tag) . $encoded_length . $value;
     }
 
+    // This method checks that password reset schema is ready.
     private function require_password_reset_schema()
     {
         $table = $this->db->raw(
@@ -737,6 +764,7 @@ class ApiAuth extends Controller
 
     }
 
+    // This method checks that refresh token schema is ready.
     private function require_refresh_token_schema()
     {
         $exists = $this->db->raw(
@@ -752,6 +780,7 @@ class ApiAuth extends Controller
         }
     }
 
+    // This method returns the signed-in user's account and member details.
     public function me()
     {
         $this->api->require_method('GET');

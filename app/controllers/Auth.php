@@ -1,8 +1,11 @@
 <?php
+// This file handles the website's sign-in and registration pages.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class Auth extends Controller
 {
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -12,6 +15,7 @@ class Auth extends Controller
         $this->call->model('User_model');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         if (!empty($_SESSION['user_id'])) {
@@ -31,11 +35,13 @@ class Auth extends Controller
         unset($_SESSION['login_error'], $_SESSION['registration_success']);
     }
 
+    // This method checks the login details and signs the user in.
     public function login()
     {
         $this->index();
     }
 
+    // This method checks login details and starts the signed-in session.
     public function authenticate()
     {
         $login = trim((string) ($_POST['login'] ?? ''));
@@ -53,6 +59,7 @@ class Auth extends Controller
         exit;
     }
 
+    // This method checks and saves a new account.
     public function register()
     {
         if (!empty($_SESSION['user_id'])) {
@@ -69,6 +76,7 @@ class Auth extends Controller
         unset($_SESSION['registration_errors'], $_SESSION['registration_old'], $_SESSION['registration_success']);
     }
 
+    // This method checks and saves a new account registration.
     public function save_registration()
     {
         $data = $_POST;
@@ -103,6 +111,7 @@ class Auth extends Controller
         exit;
     }
 
+    // This method ends the signed-in session.
     public function logout()
     {
         if (empty($_SESSION['user_id'])) {
@@ -117,6 +126,7 @@ class Auth extends Controller
         ]);
     }
 
+    // This method confirms the user's sign-out request.
     public function confirm_logout()
     {
         if (empty($_SESSION['user_id'])) {
@@ -134,6 +144,7 @@ class Auth extends Controller
         exit;
     }
 
+    // This method sets up a signed-in session for the user.
     private function start_authenticated_session(array $user)
     {
         session_regenerate_id(true);

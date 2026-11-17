@@ -1,3 +1,4 @@
+-- This upgrade adds the loan-interest return ledger for existing databases.
 USE coopwise_db;
 
 -- Apply after the cooperative-finance and loan-overdue-interest upgrades.
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS cooperative_loan_interest_distributions (
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative loan interest returns table.
 CREATE TABLE IF NOT EXISTS cooperative_loan_interest_returns (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     distribution_id INT UNSIGNED NOT NULL,

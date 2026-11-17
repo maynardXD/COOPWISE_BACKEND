@@ -1,12 +1,16 @@
 <?php
+// This file contains shared rules for common financial workflows.
+
 
 declare(strict_types=1);
 
+// This function chooses how much available savings can pay toward a loan.
 function autoPayLoanAmount(int $availableSavings, int $remainingInstallment, int $loanBalance): int
 {
     return max(0, min($availableSavings, $remainingInstallment, $loanBalance));
 }
 
+// This function converts a money amount to cents for accurate calculations.
 function moneyToCents(string $amount): int
 {
     if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -16,6 +20,7 @@ function moneyToCents(string $amount): int
     return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
 }
 
+// This function formats cents.
 function formatCents(int $amount): string
 {
     return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);

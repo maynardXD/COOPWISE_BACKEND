@@ -1,3 +1,4 @@
+-- This upgrade adds checkout and password-reset records.
 CREATE TABLE IF NOT EXISTS payment_transactions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     CONSTRAINT fk_payment_transaction_subscription FOREIGN KEY (subscription_id) REFERENCES share_capital_subscriptions(id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the payment webhook events table.
 CREATE TABLE IF NOT EXISTS payment_webhook_events (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     provider_event_id VARCHAR(120) NOT NULL,
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS payment_webhook_events (
     UNIQUE KEY uq_payment_webhook_event (provider_event_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the password reset otps table.
 CREATE TABLE IF NOT EXISTS password_reset_otps (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NOT NULL,
@@ -62,5 +65,6 @@ CREATE TABLE IF NOT EXISTS password_reset_otps (
 ALTER TABLE loan_payments
     MODIFY COLUMN payment_method ENUM('simulation','cash','bank','gcash','check','xendit','paymongo','savings') NOT NULL DEFAULT 'cash';
 
+-- This statement updates the share capital transactions table.
 ALTER TABLE share_capital_transactions
     MODIFY COLUMN payment_method ENUM('simulation','cash','bank','gcash','check','xendit','paymongo','savings') NULL;

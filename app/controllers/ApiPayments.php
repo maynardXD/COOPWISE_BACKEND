@@ -1,4 +1,6 @@
 <?php
+// This file returns member records used by payment screens.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiPayments extends Controller
@@ -6,6 +8,7 @@ class ApiPayments extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -14,6 +17,7 @@ class ApiPayments extends Controller
         $this->call->model('User_model');
     }
 
+    // This method loads the member records needed by payment screens.
     public function members()
     {
         $this->api->require_method('GET');
@@ -43,6 +47,7 @@ class ApiPayments extends Controller
         $this->api->respond(['members' => $members]);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -56,6 +61,7 @@ class ApiPayments extends Controller
         return $user;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {

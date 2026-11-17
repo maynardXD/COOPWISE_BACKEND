@@ -1,3 +1,4 @@
+-- This upgrade adds cooperative finance rules and return tables.
 USE coopwise_db;
 
 -- Apply after coopwise_policies_upgrade.sql and the existing loan/share-capital upgrades.
@@ -55,6 +56,7 @@ SET interest_paid = LEAST(paid_amount, interest_due),
     principal_paid = LEAST(principal_due, GREATEST(paid_amount - LEAST(paid_amount, interest_due), 0))
 WHERE paid_amount > 0 AND principal_paid = 0 AND interest_paid = 0;
 
+-- This statement creates the cooperative surplus distributions table.
 CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     fiscal_year SMALLINT UNSIGNED NOT NULL,
@@ -79,6 +81,7 @@ CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
         REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative member returns table.
 CREATE TABLE IF NOT EXISTS cooperative_member_returns (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     distribution_id INT UNSIGNED NOT NULL,

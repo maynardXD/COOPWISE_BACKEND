@@ -1,4 +1,6 @@
 <?php
+// This file handles savings balances, withdrawals, and ledgers.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiSavings extends Controller
@@ -6,6 +8,7 @@ class ApiSavings extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -15,6 +18,7 @@ class ApiSavings extends Controller
         $this->call->model('Member_model');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->api->require_method('GET');
@@ -159,6 +163,7 @@ class ApiSavings extends Controller
         ]);
     }
 
+    // This method checks and records a simulated savings withdrawal.
     public function withdraw()
     {
         $this->api->require_method('POST');
@@ -262,6 +267,7 @@ class ApiSavings extends Controller
         ]);
     }
 
+    // This method saves the member's automatic savings payment choices.
     public function auto_pay_preferences()
     {
         $this->api->require_method('POST');
@@ -302,6 +308,7 @@ class ApiSavings extends Controller
         ]);
     }
 
+    // This method returns savings or payment history for the selected member.
     public function ledger($member_id = null)
     {
         $this->api->require_method('GET');
@@ -394,6 +401,7 @@ class ApiSavings extends Controller
         ]);
     }
 
+    // This method emails the member a copy of the savings ledger.
     public function email_ledger_pdf()
     {
         $this->api->require_method('POST');
@@ -524,6 +532,7 @@ class ApiSavings extends Controller
         $this->api->respond(['message' => $success_message]);
     }
 
+    // This method calculates the member's current savings balance.
     private function member_balance(int $member_id)
     {
         $deposits = $this->db->table('savings_transactions')
@@ -540,6 +549,7 @@ class ApiSavings extends Controller
             - self::money_to_cents((string) ($withdrawals['total'] ?? '0'));
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -553,6 +563,7 @@ class ApiSavings extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         $member = $this->Member_model->find_for_user((int) $user['id']);
@@ -562,6 +573,7 @@ class ApiSavings extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -569,6 +581,7 @@ class ApiSavings extends Controller
         }
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -578,11 +591,13 @@ class ApiSavings extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_LEFT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }
 
+    // This method checks whether a date uses the supported format.
     private static function valid_date(string $date)
     {
         $parsed = DateTime::createFromFormat('!Y-m-d', $date);

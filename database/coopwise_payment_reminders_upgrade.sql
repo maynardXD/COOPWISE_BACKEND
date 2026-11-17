@@ -1,5 +1,7 @@
+-- This upgrade adds tracking for scheduled payment reminders.
 USE coopwise_db;
 
+-- This statement creates the payment reminder log table.
 CREATE TABLE IF NOT EXISTS payment_reminder_log (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,

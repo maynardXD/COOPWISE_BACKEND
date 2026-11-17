@@ -1,4 +1,6 @@
 <?php
+// This file starts checkout and applies confirmed payment-provider results.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
@@ -10,6 +12,7 @@ class ApiCheckout extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -19,6 +22,7 @@ class ApiCheckout extends Controller
         $this->call->model('Member_model');
     }
 
+    // This method returns the payment transactions for the user.
     public function transactions()
     {
         $user = $this->authenticated_user();
@@ -63,6 +67,7 @@ class ApiCheckout extends Controller
         ]);
     }
 
+    // This method starts a checkout for the selected payment.
     public function create_checkout()
     {
         $this->api->require_method('POST');
@@ -227,6 +232,7 @@ class ApiCheckout extends Controller
         ], 201);
     }
 
+    // This method records a payment taken from the member's savings.
     private function create_savings_payment(
         array $user,
         array $member,
@@ -377,6 +383,7 @@ class ApiCheckout extends Controller
         ], 201);
     }
 
+    // This method calculates the member's current savings balance.
     private function member_balance(int $member_id)
     {
         $result = $this->db->raw(
@@ -387,6 +394,7 @@ class ApiCheckout extends Controller
         return $result ? self::money_to_cents((string) $result['balance']) : false;
     }
 
+    // This method checks the payment provider for an updated checkout status.
     public function sync($transaction_id = null)
     {
         $this->api->require_method('POST');
@@ -454,6 +462,7 @@ class ApiCheckout extends Controller
         ]);
     }
 
+    // This method cancels a pending checkout and releases its reservation.
     public function cancel($transaction_id = null)
     {
         $this->api->require_method('POST');
@@ -544,6 +553,7 @@ class ApiCheckout extends Controller
         ]);
     }
 
+    // This method checks and processes a payment provider update.
     public function webhook()
     {
         $this->api->require_method('POST');
@@ -636,6 +646,7 @@ class ApiCheckout extends Controller
         $this->api->respond(['message' => 'Webhook processed.']);
     }
 
+    // This method reserves a loan amount while checkout is pending.
     private function reserve_loan_amount(int $loan_id, int $member_id, int $amount)
     {
         $loan = $this->db->raw(
@@ -673,6 +684,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method reserves a daily contribution while checkout is pending.
     private function reserve_paluwagan_contribution(int $cycle_id, int $member_id, int $amount, string $business_date)
     {
         $cycle = $this->db->raw('SELECT id, status, start_date, daily_contribution FROM cooperative_cycles WHERE id = ? FOR UPDATE', [$cycle_id])
@@ -709,6 +721,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method reserves a share payment while checkout is pending.
     private function reserve_share_capital_amount(int $subscription_id, int $member_id, int $amount)
     {
         $subscription = $this->db->raw(
@@ -736,6 +749,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method applies a confirmed checkout to the correct financial record.
     private function apply_paid_checkout(
         int $transaction_id,
         string $session_id,
@@ -860,6 +874,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method records a confirmed loan repayment.
     private function apply_loan_payment(array $payment)
     {
         if (!$this->loan_interest_schema_ready()) {
@@ -986,6 +1001,7 @@ class ApiCheckout extends Controller
 
     }
 
+    // This method adds a confirmed deposit to member savings.
     private function apply_savings_deposit(array $payment)
     {
         $member_id = (int) $payment['member_id'];
@@ -1027,6 +1043,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method records a confirmed cooperative contribution.
     private function apply_paluwagan_payment(array $payment)
     {
         $cycle = $this->db->raw('SELECT * FROM cooperative_cycles WHERE id = ? FOR UPDATE', [(int) $payment['cycle_id']])
@@ -1106,6 +1123,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method records a confirmed share-capital payment.
     private function apply_share_capital_payment(array $payment)
     {
         $subscription = $this->db->raw(
@@ -1144,6 +1162,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method checks the payment amount and currency.
     private static function checkout_amount_and_currency(array $session)
     {
         $amount = $session['amount'] ?? null;
@@ -1159,12 +1178,14 @@ class ApiCheckout extends Controller
         return [$amount_cents, $currency];
     }
 
+    // This method checks that a payment update came from the provider.
     private function verify_webhook_token(string $provided_token)
     {
         $expected_token = (string) getenv('XENDIT_WEBHOOK_TOKEN');
         return $expected_token !== '' && $provided_token !== '' && hash_equals($expected_token, $provided_token);
     }
 
+    // This method checks that the payment provider settings are ready.
     private function require_xendit_config()
     {
         $key = (string) getenv('XENDIT_SECRET_KEY');
@@ -1178,6 +1199,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method checks that the payment tables are installed.
     private function require_payment_schema()
     {
         $tables = $this->db->raw(
@@ -1194,6 +1216,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method checks that loan interest schema is ready.
     private function require_loan_interest_schema()
     {
         if (!$this->loan_interest_schema_ready()) {
@@ -1205,6 +1228,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method checks whether loan-interest tables are ready.
     private function loan_interest_schema_ready(): bool
     {
         $tables = $this->db->raw(
@@ -1226,11 +1250,13 @@ class ApiCheckout extends Controller
         return (int) $tables === 2 && (int) $columns === 10;
     }
 
+    // This method gets the configured payment mode.
     private static function xendit_mode()
     {
         return strtolower(trim((string) (getenv('XENDIT_MODE') ?: 'test')));
     }
 
+    // This method sends a request to the payment provider.
     private function xendit_request(string $method, string $path, ?array $payload = null)
     {
         $key = (string) getenv('XENDIT_SECRET_KEY');
@@ -1269,6 +1295,7 @@ class ApiCheckout extends Controller
         return $decoded;
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -1279,6 +1306,7 @@ class ApiCheckout extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         $member = $this->Member_model->find_for_user((int) $user['id']);
@@ -1288,6 +1316,7 @@ class ApiCheckout extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -1295,6 +1324,7 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method saves a record of the user action.
     private function write_activity_log(?int $user_id, string $module, string $action, array $details)
     {
         $id = $this->db->table('activity_logs')->insert([
@@ -1308,11 +1338,13 @@ class ApiCheckout extends Controller
         }
     }
 
+    // This method checks whether a cancelled payment arrived late.
     private static function is_late_cancelled_payment(?string $review_note): bool
     {
         return $review_note !== null && strpos($review_note, self::LATE_CANCELLED_PAYMENT_NOTE) === 0;
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -1322,11 +1354,13 @@ class ApiCheckout extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_LEFT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }
 
+    // This method finds the payment method for a transaction reference.
     private static function payment_method_for_reference(string $reference_no): string
     {
         if (strpos($reference_no, 'CW-SAV-PAY-') === 0) {

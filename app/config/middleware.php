@@ -1,4 +1,6 @@
 <?php
+// This file lists middleware that runs before requests.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 /**
  * ------------------------------------------------------------------

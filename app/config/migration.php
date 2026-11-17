@@ -1,4 +1,6 @@
 <?php
+// This file sets the database migration options.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 /**
  * ------------------------------------------------------------------

@@ -1,6 +1,8 @@
 <?php
+// This file loads the environment settings and starts the CoopWise backend.
 define('PREVENT_DIRECT_ACCESS', TRUE);
 
+// Read local environment values without replacing values already set by the server.
 $local_environment_file = dirname(__DIR__) . DIRECTORY_SEPARATOR . '.env';
 if (is_file($local_environment_file) && is_readable($local_environment_file)) {
     foreach (file($local_environment_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $environment_line) {
@@ -110,5 +112,6 @@ define('PUBLIC_DIR', $public_folder);
  * Setup done? Then Hurray!
  * ------------------------------------------------------
  */
+// Load LavaLust, which starts the app and sends the request to its route.
 require_once SYSTEM_DIR . 'kernel/LavaLust.php';
 ?>

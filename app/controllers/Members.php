@@ -1,5 +1,8 @@
 <?php
+// This file loads member lists and profiles.
+
 class Members extends Controller {
+    // This method sets up this controller and its database tools.
     public function __construct() {
         parent::__construct();
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -7,6 +10,7 @@ class Members extends Controller {
         }
     }
 
+    // This method loads the main information for this page or API.
     public function index() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_staff();
@@ -25,6 +29,7 @@ class Members extends Controller {
         ]);
     }
 
+    // This method loads the member's profile details.
     public function profile() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_login();

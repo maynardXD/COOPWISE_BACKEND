@@ -1,11 +1,16 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the logout confirmation page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <div class="login-wrap">
+    <!-- SECTION - shows login-card. -->
     <section class="login-card" aria-labelledby="logout-title">
         <h2 id="logout-title">Log out?</h2>
         <p class="muted">Are you sure you want to log out of CoopWise, <?= htmlspecialchars($user_name) ?>?</p>
 
+        <!-- FORM - submits the sign-out request. -->
         <form action="<?= BASE_URL ?>logout" method="post">
             <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
+            <!-- BUTTON - yes, log out. -->
             <button class="btn btn-primary" type="submit" style="width: 100%;">Yes, log out</button>
         </form>
 

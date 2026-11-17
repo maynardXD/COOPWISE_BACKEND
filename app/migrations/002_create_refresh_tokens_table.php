@@ -1,15 +1,19 @@
 <?php
+// This file creates or updates the 002 create refresh tokens table database tables.
+
 
 class Create_refresh_tokens_table {
 
     private $_lava;
 
+    // This function sets up this controller and its database tools.
     public function __construct()
     {
         $this->_lava = lava_instance();
         $this->_lava->call->dbforge();
     }
 
+    // This function creates the database changes for this migration.
     public function up()
     {
         if ($this->_lava->dbforge->table_exists('refresh_tokens')) {
@@ -47,6 +51,7 @@ class Create_refresh_tokens_table {
             ->create_table('refresh_tokens');
     }
 
+    // This function removes the database changes made by this migration.
     public function down()
     {
         $this->_lava->dbforge->drop_table('refresh_tokens');

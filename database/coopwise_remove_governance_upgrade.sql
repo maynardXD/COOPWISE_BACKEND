@@ -1,3 +1,4 @@
+-- This upgrade removes the retired meeting and voting tables.
 -- Back up the database before running this migration.
 -- This removes the retired meetings and voting feature and its stored records.
 DROP TABLE IF EXISTS cooperative_meeting_votes;

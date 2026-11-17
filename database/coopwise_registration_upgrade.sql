@@ -1,3 +1,4 @@
+-- This upgrade changes the fields used for member registration.
 USE coopwise_db;
 
 SET @middle_name_column_exists = (

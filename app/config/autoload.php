@@ -1,4 +1,6 @@
 <?php
+// This file tells LavaLust which app files to load automatically.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 /**
  * ------------------------------------------------------------------

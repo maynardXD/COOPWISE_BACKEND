@@ -1,4 +1,6 @@
 <?php
+// This test checks the authentication provider workflows.
+
 
 declare(strict_types=1);
 
@@ -8,6 +10,7 @@ class Controller {}
 
 require_once dirname(__DIR__) . '/app/controllers/ApiAuth.php';
 
+// This function checks that an authentication test returned the expected value.
 function assertAuthValue($expected, $actual, string $message): void
 {
     if ($expected !== $actual) {

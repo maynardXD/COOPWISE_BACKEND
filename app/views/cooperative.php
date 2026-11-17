@@ -1,4 +1,6 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the cooperative page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <?php require APP_DIR . 'views/partials/sidebar.php'; ?>
 
 <div class="panel">
@@ -9,6 +11,7 @@
     <?php if (!empty($can_manage)): ?>
         <details style="margin-bottom: 20px;">
             <summary><strong>Create a daily contribution cycle</strong></summary>
+            <!-- FORM - creates a cooperative contribution cycle. -->
             <form method="post" action="<?= BASE_URL ?>cooperative/cycles/create" class="form-grid">
                 <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                 <div><label for="cycle_name">Cycle name</label><input id="cycle_name" name="name" maxlength="120" required></div>
@@ -30,6 +33,7 @@
                 }
             }
         ?>
+        <!-- SECTION - shows the cycle schedule and its contribution progress. -->
         <section style="border-top: 1px solid #edf1f7; padding-top: 18px; margin-top: 18px;">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
                 <div>
@@ -50,10 +54,12 @@
                             <td><?= htmlspecialchars($cycle_member['payout_status'] ? ucfirst($cycle_member['payout_status']) . ' on ' . $cycle_member['payout_date'] : 'Waiting', ENT_QUOTES, 'UTF-8') ?></td>
                             <?php if (!empty($can_manage) && $cycle['status'] === 'draft'): ?>
                                 <td>
+                                    <!-- FORM - updates the members in a cooperative cycle. -->
                                     <form method="post" action="<?= BASE_URL ?>cooperative/cycles/member/remove">
                                         <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                                         <input type="hidden" name="cycle_id" value="<?= (int) $cycle['id'] ?>">
                                         <input type="hidden" name="member_id" value="<?= (int) $cycle_member['member_id'] ?>">
+                                        <!-- BUTTON - remove. -->
                                         <button class="btn btn-warning" type="submit">Remove</button>
                                     </form>
                                 </td>
@@ -65,6 +71,7 @@
             </table>
 
             <?php if (!empty($can_manage) && $cycle['status'] === 'draft'): ?>
+                <!-- FORM - updates the members in a cooperative cycle. -->
                 <form method="post" action="<?= BASE_URL ?>cooperative/cycles/member" class="form-grid" style="margin-top:16px;">
                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="cycle_id" value="<?= (int) $cycle['id'] ?>">
@@ -81,9 +88,11 @@
                     </div>
                     <div style="align-self:end;"><button class="btn btn-secondary" type="submit">Add selected members</button></div>
                 </form>
+                <!-- FORM - starts a cooperative contribution cycle. -->
                 <form method="post" action="<?= BASE_URL ?>cooperative/cycles/activate">
                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="cycle_id" value="<?= (int) $cycle['id'] ?>">
+                    <!-- BUTTON - activate cycle. -->
                     <button class="btn btn-success" type="submit">Activate cycle</button>
                 </form>
             <?php endif; ?>
@@ -106,9 +115,11 @@
         <?php foreach ($ready_payouts as $payout): ?>
             <div class="success-message">
                 <?= htmlspecialchars($payout['cycle_name'] . ' — order ' . $payout['payout_order'] . ': ' . $payout['first_name'] . ' ' . $payout['last_name'] . ' receives ₱' . number_format((float) $payout['amount'], 2) . ' on ' . $payout['payout_date'], ENT_QUOTES, 'UTF-8') ?>
+                <!-- FORM - confirms a cooperative payout. -->
                 <form method="post" action="<?= BASE_URL ?>cooperative/payouts/mark-paid">
                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                     <input type="hidden" name="payout_id" value="<?= (int) $payout['id'] ?>">
+                    <!-- BUTTON - confirm payout paid. -->
                     <button class="btn btn-success" type="submit">Confirm payout paid</button>
                 </form>
             </div>

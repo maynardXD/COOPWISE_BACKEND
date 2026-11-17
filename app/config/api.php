@@ -1,4 +1,6 @@
 <?php
+// This file sets API response, request, and CORS options.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 /**
  * ------------------------------------------------------------------

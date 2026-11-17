@@ -1,4 +1,6 @@
 <?php
+// This file prepares cooperative and activity reports.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
@@ -8,6 +10,7 @@ class ApiReports extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -16,6 +19,7 @@ class ApiReports extends Controller
         $this->call->model('User_model');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->api->require_method('GET');
@@ -135,6 +139,7 @@ class ApiReports extends Controller
         ]);
     }
 
+    // This method returns recent staff and member activity.
     public function activity()
     {
         $this->api->require_method('GET');
@@ -154,6 +159,7 @@ class ApiReports extends Controller
         ]);
     }
 
+    // This method loads activity records for the report.
     private function fetch_activity_logs(array $pagination)
     {
         $activity_logs = $this->db->raw(
@@ -175,6 +181,7 @@ class ApiReports extends Controller
         ];
     }
 
+    // This method adds up the selected financial records.
     private function sum($table, $column, $filter_column = null, $filter_value = null)
     {
         $query = $this->db->table($table)->select_sum($column, 'total');
@@ -184,6 +191,7 @@ class ApiReports extends Controller
         return $query->get()['total'] ?? '0';
     }
 
+    // This method checks that share capital schema is ready.
     private function require_share_capital_schema()
     {
         $tables = $this->db->raw(
@@ -200,6 +208,7 @@ class ApiReports extends Controller
         }
     }
 
+    // This method checks that a required database table exists.
     private function require_table($table, $migration)
     {
         $exists = $this->db->raw(
@@ -216,6 +225,7 @@ class ApiReports extends Controller
         }
     }
 
+    // This method checks that the required finance tables are installed.
     private function require_finance_schema()
     {
         $tables = $this->db->raw(
@@ -255,6 +265,7 @@ class ApiReports extends Controller
         }
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -265,6 +276,7 @@ class ApiReports extends Controller
         return $user;
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,12})(?:\.\d{1,2})?$/', $amount)) {
@@ -274,6 +286,7 @@ class ApiReports extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0');
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);

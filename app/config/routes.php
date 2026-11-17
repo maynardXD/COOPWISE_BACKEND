@@ -1,4 +1,6 @@
 <?php
+// This file connects website addresses to their page and API handlers.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 /**
  * ------------------------------------------------------------------
@@ -43,11 +45,13 @@ defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 |
 */
 
+// These routes open the website pages and handle sign-in and registration.
 $router->get('/', 'Auth::index');
 $router->get('/login', 'Auth::login');
 $router->post('/login', 'Auth::authenticate');
 $router->get('/register', 'Auth::register');
 $router->post('/register', 'Auth::save_registration');
+// These API routes handle accounts, session checks, and password reset.
 $router->post('/api/auth/login', 'ApiAuth::login');
 $router->get('/api/auth/config', 'ApiAuth::config');
 $router->post('/api/auth/google', 'ApiAuth::google_login');
@@ -72,6 +76,7 @@ $router->options('/api/auth/password-reset/confirm', 'ApiHealth::index');
 $router->options('/api/me', 'ApiHealth::index');
 $router->options('/api/health', 'ApiHealth::index');
 $router->options('/api/health/ready', 'ApiHealth::index');
+// These API routes handle loan offers, applications, payments, and schedules.
 $router->get('/api/loan-products', 'ApiLoans::products');
 $router->post('/api/loan-products', 'ApiLoans::create_product');
 $router->put('/api/loan-products/{product_id}', 'ApiLoans::update_product')->where_number('product_id');
@@ -88,11 +93,13 @@ $router->get('/api/loan-documents/{document_id}', 'ApiLoans::document_file')->wh
 $router->post('/api/loans/{loan_id}/review', 'ApiLoans::review')->where_number('loan_id');
 $router->get('/api/loans/{loan_id}/schedule', 'ApiLoans::schedule')->where_number('loan_id');
 $router->get('/api/payments', 'ApiLoans::payments');
+// These routes track online checkout and its payment-provider updates.
 $router->get('/api/checkout-transactions', 'ApiCheckout::transactions');
 $router->post('/api/checkout-transactions', 'ApiCheckout::transactions');
 $router->post('/api/checkout-transactions/webhook', 'ApiCheckout::webhook');
 $router->post('/api/checkout-transactions/{transaction_id}/sync', 'ApiCheckout::sync')->where_number('transaction_id');
 $router->post('/api/checkout-transactions/{transaction_id}/cancel', 'ApiCheckout::cancel')->where_number('transaction_id');
+// These routes handle savings, share capital, member cards, and reports.
 $router->get('/api/members', 'ApiPayments::members');
 $router->get('/api/savings', 'ApiSavings::index');
 $router->post('/api/savings/auto-pay', 'ApiSavings::auto_pay_preferences');
@@ -120,6 +127,7 @@ $router->get('/api/cooperative/surplus', 'ApiCooperativeFinance::surplus');
 $router->post('/api/cooperative/surplus', 'ApiCooperativeFinance::surplus');
 $router->post('/api/cooperative/surplus/{distribution_id}/approve', 'ApiCooperativeFinance::approve_surplus')->where_number('distribution_id');
 $router->post('/api/cooperative/surplus/{distribution_id}/cancel', 'ApiCooperativeFinance::cancel_surplus')->where_number('distribution_id');
+// OPTIONS routes allow the frontend browser to make API requests from its own site.
 $router->options('/api/loan-products', 'ApiHealth::index');
 $router->options('/api/loan-products/{product_id}', 'ApiHealth::index')->where_number('product_id');
 $router->options('/api/loans', 'ApiHealth::index');
@@ -161,6 +169,7 @@ $router->options('/api/cooperative/returns/claim', 'ApiHealth::index');
 $router->options('/api/cooperative/surplus', 'ApiHealth::index');
 $router->options('/api/cooperative/surplus/{distribution_id}/approve', 'ApiHealth::index')->where_number('distribution_id');
 $router->options('/api/cooperative/surplus/{distribution_id}/cancel', 'ApiHealth::index')->where_number('distribution_id');
+// These routes handle cooperative cycles and their payouts.
 $router->get('/api/cooperative/cycles', 'ApiCooperative::cycles');
 $router->post('/api/cooperative/cycles', 'ApiCooperative::create_cycle');
 $router->delete('/api/cooperative/cycles', 'ApiCooperative::remove_cycle');
@@ -172,6 +181,7 @@ $router->options('/api/cooperative/cycles', 'ApiHealth::index');
 $router->options('/api/cooperative/cycles/members', 'ApiHealth::index');
 $router->options('/api/cooperative/cycles/activate', 'ApiHealth::index');
 $router->options('/api/cooperative/payouts/mark-paid', 'ApiHealth::index');
+// These routes open the remaining staff and member pages and sign-out screen.
 $router->get('/logout', 'Auth::logout');
 $router->post('/logout', 'Auth::confirm_logout');
 $router->get('/profile', 'Members::profile');

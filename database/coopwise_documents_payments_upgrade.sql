@@ -1,3 +1,4 @@
+-- This upgrade adds protected loan documents and payment records.
 USE coopwise_db;
 
 SET @loan_review_note_exists = (
@@ -18,6 +19,7 @@ PREPARE coopwise_loan_review_note_statement FROM @loan_review_note_upgrade;
 EXECUTE coopwise_loan_review_note_statement;
 DEALLOCATE PREPARE coopwise_loan_review_note_statement;
 
+-- This statement creates the loan readiness submissions table.
 CREATE TABLE IF NOT EXISTS loan_readiness_submissions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS loan_readiness_submissions (
     CONSTRAINT fk_loan_readiness_reviewer FOREIGN KEY (reviewed_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the loan documents table.
 CREATE TABLE IF NOT EXISTS loan_documents (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     readiness_submission_id INT UNSIGNED NOT NULL,
@@ -48,6 +51,7 @@ CREATE TABLE IF NOT EXISTS loan_documents (
     CONSTRAINT fk_loan_documents_uploader FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the payment submissions table.
 CREATE TABLE IF NOT EXISTS payment_submissions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,

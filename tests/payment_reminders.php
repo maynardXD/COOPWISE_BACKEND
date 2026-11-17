@@ -1,9 +1,12 @@
 <?php
+// This test checks scheduled payment reminder behavior.
+
 
 declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/scripts/lib/payment_reminders.php';
 
+// This function checks that the reminder includes the required details.
 function assertReminderContains(string $needle, string $haystack, string $message): void
 {
     if (strpos($haystack, $needle) === false) {

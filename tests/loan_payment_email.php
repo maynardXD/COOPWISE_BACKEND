@@ -1,4 +1,6 @@
 <?php
+// This test checks the loan payment email content.
+
 
 declare(strict_types=1);
 
@@ -8,6 +10,7 @@ class Controller {}
 
 require_once dirname(__DIR__) . '/app/controllers/ApiLoans.php';
 
+// This function checks that the loan email includes the required details.
 function assertLoanEmailContains(string $needle, string $haystack, string $message): void
 {
     if (strpos($haystack, $needle) === false) {

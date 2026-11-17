@@ -1,5 +1,7 @@
+-- This upgrade adds share subscriptions and contribution records.
 USE coopwise_db;
 
+-- This statement creates the share capital subscriptions table.
 CREATE TABLE IF NOT EXISTS share_capital_subscriptions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -20,6 +22,7 @@ CREATE TABLE IF NOT EXISTS share_capital_subscriptions (
     CONSTRAINT fk_share_capital_subscription_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the share capital transactions table.
 CREATE TABLE IF NOT EXISTS share_capital_transactions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,

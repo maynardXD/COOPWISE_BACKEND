@@ -1,6 +1,10 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+/*
+ * This file sends cooperative capital and member-return information to the website.
+ * It also handles a member moving an available return to savings or share capital.
+ */
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
 
 class ApiCooperativeFinance extends Controller
@@ -8,6 +12,7 @@ class ApiCooperativeFinance extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -17,6 +22,7 @@ class ApiCooperativeFinance extends Controller
         $this->call->model('Member_model');
     }
 
+    // This prepares the capital breakdown and return history for the signed-in user.
     public function index()
     {
         $this->api->require_method('GET');
@@ -137,6 +143,7 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond($result);
     }
 
+    // This moves available returns to the member's chosen account and records the claim.
     public function claim_returns()
     {
         $this->api->require_method('POST');
@@ -305,6 +312,7 @@ class ApiCooperativeFinance extends Controller
         ]);
     }
 
+    // This method returns or creates cooperative surplus distribution information.
     public function surplus()
     {
         $user = $this->authenticated_user();
@@ -349,6 +357,7 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond(['distributions' => $distributions]);
     }
 
+    // This method approves a draft cooperative surplus distribution.
     public function approve_surplus($distribution_id = null)
     {
         $this->api->require_method('POST');
@@ -407,6 +416,7 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond(['message' => 'Surplus distribution approved and member returns published.']);
     }
 
+    // This method cancels a draft surplus distribution.
     public function cancel_surplus($distribution_id = null)
     {
         $this->api->require_method('POST');
@@ -455,6 +465,7 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond(['message' => 'Unpublished surplus draft cancelled. You can prepare a corrected draft.']);
     }
 
+    // This method prepares a draft surplus distribution for staff review.
     private function create_surplus_draft(array $user)
     {
         $data = $this->api->body();
@@ -602,6 +613,7 @@ class ApiCooperativeFinance extends Controller
         $this->api->respond(['message' => 'Surplus distribution draft calculated. Review it before publishing.', 'id' => (int) $id], 201);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -615,6 +627,7 @@ class ApiCooperativeFinance extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         $member = $this->Member_model->find_for_user((int) $user['id']);
@@ -624,6 +637,7 @@ class ApiCooperativeFinance extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -631,6 +645,7 @@ class ApiCooperativeFinance extends Controller
         }
     }
 
+    // This method checks that the required finance tables are installed.
     private function require_finance_schema()
     {
         $required_tables = [
@@ -675,6 +690,7 @@ class ApiCooperativeFinance extends Controller
         }
     }
 
+    // This method saves a record of the user action.
     private function write_activity_log(int $user_id, string $module, string $action, array $details)
     {
         $id = $this->db->table('activity_logs')->insert([
@@ -688,6 +704,7 @@ class ApiCooperativeFinance extends Controller
         }
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -697,6 +714,7 @@ class ApiCooperativeFinance extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);

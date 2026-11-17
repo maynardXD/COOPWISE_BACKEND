@@ -1,15 +1,19 @@
 <?php
+// This file creates or updates the 000 initial setup database tables.
+
 
 class Initial_setup {
 
     private $_lava;
 
+    // This function sets up this controller and its database tools.
     public function __construct()
     {
         $this->_lava = lava_instance();
         $this->_lava->call->dbforge();
     }
 
+    // This function creates the database changes for this migration.
     public function up()
     {
         if ($this->_lava->dbforge->table_exists('migrations')) {
@@ -39,6 +43,7 @@ class Initial_setup {
             ->create_table('migrations');
     }
 
+    // This function removes the database changes made by this migration.
     public function down()
     {
         // Intentionally left as a no-op.

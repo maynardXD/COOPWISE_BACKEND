@@ -1,4 +1,6 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the member profile page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <?php require APP_DIR . 'views/partials/sidebar.php'; ?>
 
 <div class="card-grid">

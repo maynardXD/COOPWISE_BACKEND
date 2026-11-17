@@ -1,5 +1,7 @@
 <div class="app-shell">
     <?php
+// This file displays the sidebar page.
+
     $sidebar_user = $user ?? [];
     $sidebar_role = $sidebar_user['role'] ?? ($_SESSION['role'] ?? 'member');
     $sidebar_under_18 = $sidebar_role === 'member' && !empty($sidebar_user['under_18']);

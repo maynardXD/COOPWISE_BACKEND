@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+/*
+ * This file has shared money and cooperative finance calculations.
+ * The API and automatic payment script use the same rules from here.
+ */
 function cooperativeMoneyToCents(string $amount): int
 {
     if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -11,16 +15,19 @@ function cooperativeMoneyToCents(string $amount): int
     return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
 }
 
+// This function formats cents as a two-decimal money amount.
 function cooperativeFormatCents(int $amount): string
 {
     return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
 }
 
+// This function calculates the loan amount that is not reserved by checkout.
 function cooperativeAvailableRepayment(int $balance, int $reservedPayments): int
 {
     return max(0, $balance - max(0, $reservedPayments));
 }
 
+// This calculates overdue interest for an installment without changing its original loan terms.
 function cooperativeAccrueLoanScheduleOverdueInterest(array $schedule, int $annualRateBasisPoints, string $today): array
 {
     $denominator = 10000 * 365;
@@ -82,6 +89,7 @@ function cooperativeAccrueLoanScheduleOverdueInterest(array $schedule, int $annu
     ];
 }
 
+// This calculates lending capacity after interest returns and existing loans are counted.
 function cooperativeLoanCapitalCapacity(
     int $paidUpShareCapital,
     int $collectedInterest,
@@ -97,6 +105,7 @@ function cooperativeLoanCapitalCapacity(
     return max(0, $paidUpShareCapital + $lendableInterest - $outstandingPrincipal - $pendingPrincipal);
 }
 
+// This reads the current capital and loan totals from the database.
 function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null): array
 {
     $pendingLoanFilter = $excludePendingLoanId === null ? '' : ' AND id <> ?';
@@ -148,6 +157,7 @@ function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null)
     ];
 }
 
+// This splits interest equally and shares any leftover cents fairly across members.
 function cooperativeEqualInterestAllocations(int $interestCents, array $memberIds, int $rotation = 0): array
 {
     if ($interestCents < 0) {
@@ -177,6 +187,7 @@ function cooperativeEqualInterestAllocations(int $interestCents, array $memberId
     return $allocations;
 }
 
+// This function runs a database query using the available connection.
 function cooperativeFinanceStatement($db, string $sql, array $params = [])
 {
     if ($db instanceof PDO) {
@@ -188,6 +199,7 @@ function cooperativeFinanceStatement($db, string $sql, array $params = [])
     return $db->raw($sql, $params);
 }
 
+// This saves a repayment's interest split once, so the same payment cannot be counted twice.
 function cooperativeRecordLoanInterestDistribution($db, int $loanPaymentId, int $interestCents): ?int
 {
     if ($loanPaymentId < 1 || $interestCents < 0) {
@@ -267,6 +279,7 @@ function cooperativeRecordLoanInterestDistribution($db, int $loanPaymentId, int 
     return $distributionId;
 }
 
+// This function saves a finance record using the available connection.
 function cooperativeFinanceInsert($db, string $table, array $values): int
 {
     if ($db instanceof PDO) {
@@ -285,6 +298,7 @@ function cooperativeFinanceInsert($db, string $table, array $values): int
     return (int) $db->table($table)->insert($values);
 }
 
+// This function converts elapsed demo time into membership days.
 function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecondsPerDay = 6): int
 {
     if ($elapsedSeconds < 0 || $realSecondsPerDay < 1) {
@@ -297,6 +311,7 @@ function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecond
     return 30 + intdiv($elapsedSeconds - $firstPeriodSeconds, 10);
 }
 
+// This function calculates how long the demo membership period takes.
 function cooperativeMembershipRequiredSeconds(int $membershipDays, int $realSecondsPerDay = 6): int
 {
     if ($membershipDays < 0 || $realSecondsPerDay < 1) {
@@ -308,6 +323,7 @@ function cooperativeMembershipRequiredSeconds(int $membershipDays, int $realSeco
     return (30 * $realSecondsPerDay) + (($membershipDays - 30) * 10);
 }
 
+// This function checks the member against the cooperative loan rules.
 function cooperativeLoanEligibility(
     int $paidUpShareCapital,
     int $savingsBalance,
@@ -354,6 +370,7 @@ function cooperativeLoanEligibility(
     ];
 }
 
+// This function splits the approved surplus between member returns.
 function cooperativeSurplusAllocations(
     int $netSurplus,
     int $fiscalYear,
@@ -409,6 +426,7 @@ function cooperativeSurplusAllocations(
     ];
 }
 
+// This function splits an amount according to each member's share.
 function cooperativeProportionalAllocation(int $pool, array $weights): array
 {
     $weights = array_filter($weights, static function ($weight): bool {
@@ -442,6 +460,7 @@ function cooperativeProportionalAllocation(int $pool, array $weights): array
     return $allocations;
 }
 
+// This function splits a repayment across the loan installments.
 function allocateLoanRepayment(int $amount, array $schedules): array
 {
     if ($amount < 1) {

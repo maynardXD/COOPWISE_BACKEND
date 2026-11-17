@@ -1,4 +1,6 @@
 <?php
+// This test checks cooperative money and repayment calculations.
+
 
 declare(strict_types=1);
 
@@ -11,6 +13,7 @@ require_once dirname(__DIR__) . '/app/controllers/ApiCheckout.php';
 require_once dirname(__DIR__) . '/scripts/lib/cooperative_finance.php';
 require_once dirname(__DIR__) . '/scripts/lib/financial_workflows.php';
 
+// This function checks that a test value matches the expected result.
 function assertSameValue($expected, $actual, string $message): void
 {
     if ($expected !== $actual) {
@@ -24,11 +27,13 @@ class WorkflowTestStatement
 {
     private $result;
 
+    // This function sets up this controller and its database tools.
     public function __construct($result)
     {
         $this->result = $result;
     }
 
+    // This function returns the next prepared database result for the test.
     public function fetch($mode = null)
     {
         return $this->result;
@@ -39,11 +44,13 @@ class WorkflowTestTable
 {
     private $database;
 
+    // This function sets up this controller and its database tools.
     public function __construct(WorkflowTestDatabase $database)
     {
         $this->database = $database;
     }
 
+    // This function saves a fake database row for the test.
     public function insert(array $row)
     {
         $this->database->transactions[] = $row;
@@ -56,6 +63,7 @@ class WorkflowTestDatabase
     public $transactions = [];
     public $opening_balance = 2500;
 
+    // This function returns a fake database result for the test.
     public function raw(string $sql, array $params = [])
     {
         if (strpos($sql, 'SELECT amount FROM savings_transactions') !== false) {
@@ -81,6 +89,7 @@ class WorkflowTestDatabase
         return new WorkflowTestStatement(['id' => 7]);
     }
 
+    // This function returns a fake table query for the test.
     public function table(string $name)
     {
         if ($name !== 'savings_transactions') {
@@ -94,16 +103,19 @@ class LoanInterestTestStatement
 {
     private $rows;
 
+    // This function sets up this controller and its database tools.
     public function __construct(array $rows)
     {
         $this->rows = $rows;
     }
 
+    // This function returns the next prepared database result for the test.
     public function fetch($mode = null)
     {
         return $this->rows ? $this->rows[0] : false;
     }
 
+    // This function returns the prepared database rows for the test.
     public function fetchAll($mode = null)
     {
         if ($mode === PDO::FETCH_COLUMN) {
@@ -120,12 +132,14 @@ class LoanInterestTestTable
     private $database;
     private $name;
 
+    // This function sets up this controller and its database tools.
     public function __construct(LoanInterestTestDatabase $database, string $name)
     {
         $this->database = $database;
         $this->name = $name;
     }
 
+    // This function saves a fake database row for the test.
     public function insert(array $row)
     {
         return $this->database->insert($this->name, $row);
@@ -139,6 +153,7 @@ class LoanInterestTestDatabase
     public $distributions = [];
     public $returns = [];
 
+    // This function returns a fake database result for the test.
     public function raw(string $sql, array $params = [])
     {
         if (strpos($sql, 'SELECT id, interest_amount FROM cooperative_loan_interest_distributions') !== false) {
@@ -166,11 +181,13 @@ class LoanInterestTestDatabase
         throw new RuntimeException('Unexpected loan-interest test query: ' . $sql);
     }
 
+    // This function returns a fake table query for the test.
     public function table(string $name)
     {
         return new LoanInterestTestTable($this, $name);
     }
 
+    // This function saves a fake database row for the test.
     public function insert(string $table, array $row): int
     {
         if ($table === 'cooperative_loan_interest_distributions') {

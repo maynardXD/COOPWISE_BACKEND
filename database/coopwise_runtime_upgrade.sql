@@ -1,3 +1,4 @@
+-- This upgrade adds runtime support tables and indexes.
 -- Apply after backing up an existing CoopWise database.
 -- Adds refresh-session storage and durable daily auto-pay run monitoring.
 
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the auto pay runs table.
 CREATE TABLE IF NOT EXISTS auto_pay_runs (
     run_id CHAR(32) NOT NULL,
     status ENUM('running','completed','failed') NOT NULL DEFAULT 'running',

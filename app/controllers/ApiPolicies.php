@@ -1,4 +1,6 @@
 <?php
+// This file reads and updates the cooperative's sample policies.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiPolicies extends Controller
@@ -6,6 +8,7 @@ class ApiPolicies extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -14,6 +17,7 @@ class ApiPolicies extends Controller
         $this->call->model('User_model');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->api->require_method('GET');
@@ -33,6 +37,7 @@ class ApiPolicies extends Controller
         $this->api->respond(['policies' => $policy]);
     }
 
+    // This method updates the .
     public function update()
     {
         $this->api->require_method('POST');
@@ -103,6 +108,7 @@ class ApiPolicies extends Controller
         $this->api->respond(['message' => 'Cooperative policies saved.']);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -116,6 +122,7 @@ class ApiPolicies extends Controller
         return $user;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -123,6 +130,7 @@ class ApiPolicies extends Controller
         }
     }
 
+    // This method checks that policy schema is ready.
     private function require_policy_schema()
     {
         $columns = $this->db->raw(
@@ -144,6 +152,7 @@ class ApiPolicies extends Controller
         }
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -153,11 +162,13 @@ class ApiPolicies extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_RIGHT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }
 
+    // This method checks whether a date uses the supported format.
     private static function valid_date(string $date)
     {
         $parsed = DateTime::createFromFormat('!Y-m-d', $date);

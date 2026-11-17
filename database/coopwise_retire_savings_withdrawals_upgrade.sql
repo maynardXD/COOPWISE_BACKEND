@@ -1,3 +1,4 @@
+-- This upgrade closes old simulated savings withdrawal requests.
 -- Back up the database before running this migration.
 -- Refunds old pending simulations once and keeps the request rows as history.
 -- Run after coopwise_financial_workflows_upgrade.sql on an existing database.

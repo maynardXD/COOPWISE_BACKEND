@@ -1,4 +1,6 @@
 <?php
+// This file reads and updates member profiles in the database.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class Member_model extends Model
@@ -16,12 +18,14 @@ class Member_model extends Model
         'status'
     ];
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
         $this->call->database();
     }
 
+    // This method finds for user.
     public function find_for_user($user_id)
     {
         return $this->db->table($this->table)
@@ -29,6 +33,7 @@ class Member_model extends Model
             ->get();
     }
 
+    // This method creates the next member number.
     public function next_member_number()
     {
         $latest = $this->db->raw(

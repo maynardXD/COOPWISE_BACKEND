@@ -1,4 +1,6 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the loans page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <?php require APP_DIR . 'views/partials/sidebar.php'; ?>
 
 <div class="panel">
@@ -9,6 +11,7 @@
         <h3 style="margin-top: 0;">Apply for a monthly loan</h3>
         <?php if (!empty($products)): ?>
             <p class="muted">Interest uses simple flat monthly interest on the original principal: principal × monthly rate × term. The displayed rate is saved with your application.</p>
+            <!-- FORM - submits a loan application. -->
             <form method="post" action="<?= BASE_URL ?>loans/apply" class="form-grid">
                 <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                 <div>
@@ -45,6 +48,7 @@
         <details style="margin: 18px 0;">
             <summary><strong>Configure a loan product</strong></summary>
             <p class="muted">Set the cooperative's own rate; no market rate or fee is assumed. Rate is a percentage per month, calculated flat on the original principal.</p>
+            <!-- FORM - creates a loan offer. -->
             <form method="post" action="<?= BASE_URL ?>loans/products/create" class="form-grid">
                 <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                 <div><label for="product_name">Product name</label><input id="product_name" name="name" maxlength="100" required></div>
@@ -70,6 +74,7 @@
                         <td>
                             <details>
                                 <summary>Edit</summary>
+                                <!-- FORM - submits a loan application. -->
                                 <form method="post" action="<?= BASE_URL ?>loans/products/update">
                                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                                     <input type="hidden" name="product_id" value="<?= (int) $product['id'] ?>">
@@ -78,6 +83,7 @@
                                     <label>Maximum principal (₱)</label><input name="max_amount" type="number" min="1" step="0.01" value="<?= htmlspecialchars($product['max_amount'], ENT_QUOTES, 'UTF-8') ?>" required>
                                     <label>Maximum term (months)</label><input name="max_term_months" type="number" min="1" max="120" value="<?= (int) $product['max_term_months'] ?>" required>
                                     <label>Description</label><input name="description" maxlength="255" value="<?= htmlspecialchars($product['description'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+                                    <!-- BUTTON - save settings. -->
                                     <button class="btn btn-secondary" type="submit">Save settings</button>
                                 </form>
                             </details>
@@ -102,9 +108,11 @@
                         <td><?= htmlspecialchars($application['purpose'] ?? '-', ENT_QUOTES, 'UTF-8') ?></td>
                         <td>
                             <?php foreach (['approve' => 'Approve', 'reject' => 'Reject'] as $decision => $label): ?>
+                                <!-- FORM - saves the staff loan review decision. -->
                                 <form method="post" action="<?= BASE_URL ?>loans/review/<?= (int) $application['id'] ?>" style="display: inline;">
                                     <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
                                     <input type="hidden" name="decision" value="<?= $decision ?>">
+                                    <!-- BUTTON - submits the selected loan review decision. -->
                                     <button class="btn <?= $decision === 'approve' ? 'btn-success' : 'btn-warning' ?>" type="submit"><?= $label ?></button>
                                 </form>
                             <?php endforeach; ?>

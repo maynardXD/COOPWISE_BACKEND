@@ -1,5 +1,8 @@
 <?php
+// This file handles the server-rendered cooperative cycle pages.
+
 class Cooperative extends Controller {
+    // This method sets up this controller and its database tools.
     public function __construct() {
         parent::__construct();
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -7,6 +10,7 @@ class Cooperative extends Controller {
         }
     }
 
+    // This method loads the main information for this page or API.
     public function index() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_login();
@@ -93,6 +97,7 @@ class Cooperative extends Controller {
         unset($_SESSION['cooperative_error'], $_SESSION['cooperative_success']);
     }
 
+    // This method creates a daily cooperative contribution cycle.
     public function create_cycle() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_staff();
@@ -123,6 +128,7 @@ class Cooperative extends Controller {
         exit;
     }
 
+    // This method adds a member to a cooperative cycle.
     public function add_member() {
         $this->call->library('coopwise_access');
         $this->coopwise_access->require_staff();
@@ -207,6 +213,7 @@ class Cooperative extends Controller {
         exit;
     }
 
+    // This method starts a cooperative contribution cycle.
     public function activate_cycle() {
         $this->call->library('coopwise_access');
         $this->coopwise_access->require_staff();
@@ -233,6 +240,7 @@ class Cooperative extends Controller {
         exit;
     }
 
+    // This method removes a member from a draft cooperative cycle.
     public function remove_member() {
         $this->call->library('coopwise_access');
         $this->coopwise_access->require_staff();
@@ -269,6 +277,7 @@ class Cooperative extends Controller {
         exit;
     }
 
+    // This method confirms a payout and credits the member's demo balance.
     public function mark_payout_paid() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_staff();
@@ -378,12 +387,14 @@ class Cooperative extends Controller {
         exit;
     }
 
+    // This method returns to the page and shows the reason for the error.
     private function redirect_with_error($message) {
         $_SESSION['cooperative_error'] = $message;
         header('Location: ' . BASE_URL . 'cooperative');
         exit;
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount) {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
             return false;
@@ -392,6 +403,7 @@ class Cooperative extends Controller {
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0');
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount) {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }

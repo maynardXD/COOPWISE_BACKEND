@@ -1,4 +1,6 @@
 <?php
+// This file handles share subscriptions and paid contributions.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
@@ -8,6 +10,7 @@ class ApiShareCapital extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -17,6 +20,7 @@ class ApiShareCapital extends Controller
         $this->call->model('Member_model');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->api->require_method('GET');
@@ -135,6 +139,7 @@ class ApiShareCapital extends Controller
         ]);
     }
 
+    // This method creates a member share-capital subscription.
     public function create_subscription()
     {
         $this->api->require_method('POST');
@@ -193,6 +198,7 @@ class ApiShareCapital extends Controller
         $this->api->respond(['message' => 'Share capital subscription created.', 'id' => (int) $id], 201);
     }
 
+    // This method records a member's paid share-capital contribution.
     public function member_contribution()
     {
         $this->api->require_method('POST');
@@ -268,6 +274,7 @@ class ApiShareCapital extends Controller
         ], 201);
     }
 
+    // This method cancels a share-capital subscription with no payment.
     public function cancel_subscription($subscription_id = null)
     {
         $this->api->require_method('POST');
@@ -332,6 +339,7 @@ class ApiShareCapital extends Controller
         $this->api->respond(['message' => 'Unpaid share subscription cancelled.']);
     }
 
+    // This method records a staff-entered investment in share capital.
     public function admin_investment()
     {
         $this->api->require_method('POST');
@@ -446,6 +454,7 @@ class ApiShareCapital extends Controller
         ], 201);
     }
 
+    // This method moves an eligible share payment back to savings.
     public function redeem_subscription($subscription_id = null)
     {
         $this->api->require_method('POST');
@@ -599,6 +608,7 @@ class ApiShareCapital extends Controller
         ]);
     }
 
+    // This method records a reversal for a share-capital payment.
     public function reverse_payment($transaction_id = null)
     {
         $this->api->require_method('POST');
@@ -681,6 +691,7 @@ class ApiShareCapital extends Controller
         $this->api->respond(['message' => 'Share capital payment reversed with an audit record.', 'id' => (int) $inserted], 201);
     }
 
+    // This method calculates the amount already paid toward a subscription.
     private function net_paid_cents(int $subscription_id)
     {
         $row = $this->db->raw(
@@ -692,6 +703,7 @@ class ApiShareCapital extends Controller
         return self::money_to_cents((string) ($row['paid'] ?? '0.00'));
     }
 
+    // This method saves a record of the user action.
     private function write_activity_log(int $user_id, string $module, string $action, array $details)
     {
         $id = $this->db->table('activity_logs')->insert([
@@ -705,6 +717,7 @@ class ApiShareCapital extends Controller
         }
     }
 
+    // This method checks that the required database tables are installed.
     private function require_schema()
     {
         $tables = $this->db->raw(
@@ -721,6 +734,7 @@ class ApiShareCapital extends Controller
         }
     }
 
+    // This method checks that redemption schema is ready.
     private function require_redemption_schema()
     {
         $required_tables = [
@@ -761,6 +775,7 @@ class ApiShareCapital extends Controller
         }
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -774,6 +789,7 @@ class ApiShareCapital extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         $member = $this->Member_model->find_for_user((int) $user['id']);
@@ -783,6 +799,7 @@ class ApiShareCapital extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -790,6 +807,7 @@ class ApiShareCapital extends Controller
         }
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -799,11 +817,13 @@ class ApiShareCapital extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0');
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }
 
+    // This method checks whether a date uses the supported format.
     private static function valid_date(string $date)
     {
         $parsed = DateTime::createFromFormat('!Y-m-d', $date);

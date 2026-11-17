@@ -1,5 +1,8 @@
 <?php
+// This file loads the reports page.
+
 class Reports extends Controller {
+    // This method sets up this controller and its database tools.
     public function __construct() {
         parent::__construct();
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -7,6 +10,7 @@ class Reports extends Controller {
         }
     }
 
+    // This method loads the main information for this page or API.
     public function index() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_staff();

@@ -1,4 +1,6 @@
 <?php
+// This file reads and updates user accounts in the database.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class User_model extends Model
@@ -12,6 +14,7 @@ class User_model extends Model
         'status'
     ];
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -19,6 +22,7 @@ class User_model extends Model
         $this->call->model('Member_model');
     }
 
+    // This method finds for login.
     public function find_for_login($login)
     {
         $user = $this->db->table('users u')
@@ -37,6 +41,7 @@ class User_model extends Model
         return $user;
     }
 
+    // This method finds identity.
     public function find_identity($id)
     {
         return $this->db->table($this->table)
@@ -45,6 +50,7 @@ class User_model extends Model
             ->get();
     }
 
+    // This method checks whether the email address is already in use.
     public function email_exists($email)
     {
         return $this->db->table($this->table)
@@ -52,6 +58,7 @@ class User_model extends Model
             ->count() > 0;
     }
 
+    // This method checks whether the phone number is already in use.
     public function phone_exists($phone)
     {
         return $this->db->table('members')
@@ -59,6 +66,7 @@ class User_model extends Model
             ->count() > 0;
     }
 
+    // This method checks whether the email domain can receive mail.
     private function email_domain_has_mail_records($email)
     {
         $domain = substr(strrchr($email, '@'), 1);
@@ -68,6 +76,7 @@ class User_model extends Model
             || checkdnsrr($domain, 'AAAA');
     }
 
+    // This method creates a member profile for the new account.
     public function register_member(array $user_data, array $member_data)
     {
         $this->db->transaction();
@@ -93,6 +102,7 @@ class User_model extends Model
         }
     }
 
+    // This method checks the submitted registration values.
     public function validate_registration(array $data)
     {
         $errors = [];
@@ -145,6 +155,7 @@ class User_model extends Model
         return $errors;
     }
 
+    // This method checks and saves a new account registration.
     public function save_registration(array $data)
     {
         $first = trim((string) $data['first_name']);

@@ -1,3 +1,4 @@
+-- This upgrade adds overdue loan-interest tracking.
 USE coopwise_db;
 
 SET @loan_type_overdue_interest_exists = (

@@ -1,10 +1,13 @@
 <?php
+// This file builds and sends loan and contribution reminders.
+
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/brevo_email.php';
 require_once __DIR__ . '/cooperative_finance.php';
 
+// This function sends due-date reminders and records each attempt.
 function sendDailyPaymentReminders(PDO $db): array
 {
     $timezone = new DateTimeZone('Asia/Manila');
@@ -202,6 +205,7 @@ function sendDailyPaymentReminders(PDO $db): array
     return $result;
 }
 
+// This function builds the reminder email for the member.
 function paymentReminderBuildEmail(array $member, array $items, string $asOfDate): array
 {
     if ($items === []) {
@@ -255,6 +259,7 @@ function paymentReminderBuildEmail(array $member, array $items, string $asOfDate
     ];
 }
 
+// This function records whether a reminder email was sent.
 function paymentReminderRecordAttempt(
     PDO $db,
     int $memberId,

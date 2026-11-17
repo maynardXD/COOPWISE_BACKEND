@@ -1,7 +1,10 @@
 <?php
+// This file sends email through the Brevo service.
+
 
 declare(strict_types=1);
 
+// This function sends brevo transactional email.
 function sendBrevoTransactionalEmail(
     string $recipientEmail,
     string $subject,

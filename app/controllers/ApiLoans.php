@@ -1,6 +1,10 @@
 <?php
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
+/*
+ * This file handles loan requests from the website.
+ * It checks the rules again on the backend before saving loan changes.
+ */
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
 require_once dirname(__DIR__, 2) . '/scripts/lib/brevo_email.php';
 
@@ -9,6 +13,7 @@ class ApiLoans extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -19,6 +24,7 @@ class ApiLoans extends Controller
         $this->call->model('Member_model');
     }
 
+    // This sends the loan offers that a member or staff account is allowed to see.
     public function products()
     {
         $this->api->require_method('GET');
@@ -68,6 +74,7 @@ class ApiLoans extends Controller
         ]);
     }
 
+    // This checks the member's age, savings, share capital, documents, and loan balances.
     public function eligibility()
     {
         $this->api->require_method('GET');
@@ -106,6 +113,7 @@ class ApiLoans extends Controller
         $this->api->respond(['eligibility' => $eligibility]);
     }
 
+    // This method creates a loan offer with the staff-selected rules.
     public function create_product()
     {
         $this->api->require_method('POST');
@@ -124,6 +132,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan product created.', 'id' => (int) $id], 201);
     }
 
+    // This method updates a loan offer.
     public function update_product($product_id = null)
     {
         $this->api->require_method('PUT');
@@ -141,6 +150,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan product updated.']);
     }
 
+    // This method removes a loan offer that is no longer needed.
     public function delete_product($product_id = null)
     {
         $this->api->require_method('DELETE');
@@ -191,6 +201,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan offer deleted.']);
     }
 
+    // Staff-recorded repayments are checked, split, and saved together in one transaction.
     public function record_payment($loan_id = null)
     {
         $this->api->require_method('POST');
@@ -356,6 +367,7 @@ class ApiLoans extends Controller
         ], 201);
     }
 
+    // This method emails the member their loan balance and payment schedule.
     public function email_payment_details($loan_id = null)
     {
         $this->api->require_method('POST');
@@ -429,6 +441,7 @@ class ApiLoans extends Controller
         ], 201);
     }
 
+    // This method returns the loans this user is allowed to see.
     public function loans()
     {
         $this->api->require_method('GET');
@@ -545,6 +558,7 @@ class ApiLoans extends Controller
         ]);
     }
 
+    // This checks a new application before saving it as a pending loan.
     public function apply()
     {
         $this->api->require_method('POST');
@@ -629,6 +643,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan application submitted for review.', 'id' => (int) $id], 201);
     }
 
+    // This method returns the member's loan document review status.
     public function readiness()
     {
         $user = $this->authenticated_user();
@@ -664,6 +679,7 @@ class ApiLoans extends Controller
         $this->api->respond(['submissions' => $submissions]);
     }
 
+    // This method approves or rejects loan documents submitted by a member.
     public function review_readiness($submission_id = null)
     {
         $this->api->require_method('POST');
@@ -698,6 +714,7 @@ class ApiLoans extends Controller
         ]);
     }
 
+    // This method sends a protected loan document to an authorized staff user.
     public function document_file($document_id = null)
     {
         $this->api->require_method('GET');
@@ -717,6 +734,7 @@ class ApiLoans extends Controller
         $this->send_private_image($document);
     }
 
+    // Staff use this to approve or reject an application and create its payment schedule.
     public function review($loan_id = null)
     {
         $this->api->require_method('POST');
@@ -868,6 +886,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Application approved, available cooperative capital was reduced by the principal, the member’s demo savings were credited, and monthly installments were generated.']);
     }
 
+    // This returns the installments and payment history for one loan.
     public function schedule($loan_id = null)
     {
         $this->api->require_method('GET');
@@ -946,6 +965,7 @@ class ApiLoans extends Controller
         ]);
     }
 
+    // This method returns loan payment history.
     public function payments()
     {
         $this->api->require_method('GET');
@@ -977,6 +997,7 @@ class ApiLoans extends Controller
         ]);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -990,6 +1011,7 @@ class ApiLoans extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         if ($user['role'] !== 'member') {
@@ -1002,6 +1024,7 @@ class ApiLoans extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -1009,6 +1032,7 @@ class ApiLoans extends Controller
         }
     }
 
+    // This method saves a record of the user action.
     private function write_activity_log(int $user_id, string $module, string $action, array $details)
     {
         $id = $this->db->table('activity_logs')->insert([
@@ -1022,6 +1046,7 @@ class ApiLoans extends Controller
         }
     }
 
+    // This method builds the loan payment details email.
     private static function loan_payment_email_content(array $loan, array $schedule): array
     {
         $escape = static function ($value): string {
@@ -1135,6 +1160,7 @@ class ApiLoans extends Controller
         ];
     }
 
+    // This method loads the member's latest loan document review.
     private function latest_readiness(int $member_id)
     {
         return $this->db->table('loan_readiness_submissions')
@@ -1144,6 +1170,7 @@ class ApiLoans extends Controller
             ->get();
     }
 
+    // These checks use the saved cooperative rules and the member's current account balances.
     private function member_eligibility(array $member, ?int $ignored_pending_loan_id = null, int $product_limit = PHP_INT_MAX)
     {
         $member_id = (int) $member['id'];
@@ -1225,6 +1252,7 @@ class ApiLoans extends Controller
         ];
     }
 
+    // This method checks that the required finance tables are installed.
     private function require_finance_schema()
     {
         $tables = $this->db->raw(
@@ -1266,6 +1294,7 @@ class ApiLoans extends Controller
         }
     }
 
+    // This method updates overdue interest for the loan installments.
     private function accrue_loan_schedules(array $schedules, string $annual_rate, string $today, bool $persist): array
     {
         $rateBasisPoints = (int) round((float) $annual_rate * 100);
@@ -1314,6 +1343,7 @@ class ApiLoans extends Controller
         ];
     }
 
+    // This method loads the documents in a loan readiness submission.
     private function readiness_documents(int $submission_id)
     {
         return $this->db->table('loan_documents')
@@ -1323,6 +1353,7 @@ class ApiLoans extends Controller
             ->get_all();
     }
 
+    // This method saves a member's loan document submission.
     private function submit_readiness(array $user)
     {
         $this->api->require_method('POST');
@@ -1381,6 +1412,7 @@ class ApiLoans extends Controller
         $this->api->respond(['message' => 'Loan documents submitted. Available loan offers will appear after staff approval.'], 201);
     }
 
+    // This method checks the loan document images before saving them.
     private function validated_image_uploads($field, $maximum_count)
     {
         if (!isset($_FILES[$field])) {
@@ -1426,6 +1458,7 @@ class ApiLoans extends Controller
         return $files;
     }
 
+    // This method saves a loan document where only authorized users can access it.
     private function store_private_image(array $file)
     {
         $directory = ROOT_DIR . 'runtime' . DIRECTORY_SEPARATOR . 'private_uploads';
@@ -1441,6 +1474,7 @@ class ApiLoans extends Controller
         return ['name' => $name, 'path' => $path, 'mime' => $file['mime']];
     }
 
+    // This method sends a private loan document to an authorized user.
     private function send_private_image(array $file)
     {
         if (!preg_match('/^[a-f0-9]{64}\.(?:jpg|png|webp)$/D', $file['storage_name'])) {
@@ -1458,6 +1492,7 @@ class ApiLoans extends Controller
         exit;
     }
 
+    // This method checks the loan offer details entered by staff.
     private function validate_product(array $data)
     {
         $name = trim((string) ($data['name'] ?? ''));
@@ -1489,6 +1524,7 @@ class ApiLoans extends Controller
         ];
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -1498,6 +1534,7 @@ class ApiLoans extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_LEFT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);

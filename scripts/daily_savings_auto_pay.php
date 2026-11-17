@@ -1,4 +1,6 @@
 <?php
+// This script applies scheduled payments from member savings.
+
 
 declare(strict_types=1);
 
@@ -371,6 +373,7 @@ if ($reminderError instanceof Throwable || $totalErrors > 0) {
     exit(1);
 }
 
+// This function creates the payout when round is complete.
 function createPayoutWhenRoundIsComplete(PDO $db, int $cycleId, string $today): void
 {
     $count = $db->prepare('SELECT COUNT(*) FROM cooperative_cycle_members WHERE cycle_id = ?');
@@ -423,6 +426,7 @@ function createPayoutWhenRoundIsComplete(PDO $db, int $cycleId, string $today): 
     ]);
 }
 
+// This function calculates the member's available savings.
 function savingsBalance(PDO $db, int $memberId): int
 {
     $query = $db->prepare(

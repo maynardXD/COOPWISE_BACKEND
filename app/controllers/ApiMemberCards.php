@@ -1,4 +1,6 @@
 <?php
+// This file creates and checks member ID cards.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiMemberCards extends Controller
@@ -6,6 +8,7 @@ class ApiMemberCards extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -15,6 +18,7 @@ class ApiMemberCards extends Controller
         $this->call->model('Member_model');
     }
 
+    // This method creates or returns a member ID card.
     public function issue($member_id = null)
     {
         $this->api->require_method('GET');
@@ -56,6 +60,7 @@ class ApiMemberCards extends Controller
         ]);
     }
 
+    // This method checks .
     public function verify()
     {
         $this->api->require_method('GET');
@@ -99,6 +104,7 @@ class ApiMemberCards extends Controller
         ]);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -112,6 +118,7 @@ class ApiMemberCards extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         $member = $this->Member_model->find_for_user((int) $user['id']);
@@ -121,6 +128,7 @@ class ApiMemberCards extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {

@@ -1,5 +1,8 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the access denied page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <div class="login-wrap">
+    <!-- SECTION - shows login-card. -->
     <section class="login-card" aria-labelledby="denied-heading">
         <h2 id="denied-heading">Access denied</h2>
         <p class="muted"><?= htmlspecialchars($message ?? 'You are not authorized to view this page.', ENT_QUOTES, 'UTF-8') ?></p>

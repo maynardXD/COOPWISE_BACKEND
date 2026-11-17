@@ -1,3 +1,4 @@
+-- This upgrade adds first-login terms acceptance records.
 USE coopwise_db;
 
 SET @terms_required_exists = (

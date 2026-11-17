@@ -1,5 +1,8 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the register page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <div class="login-wrap">
+    <!-- SECTION - shows login-card. -->
     <section class="login-card register-card" aria-labelledby="register-heading">
         <h2 id="register-heading">Member registration</h2>
         <p class="muted">Create your CoopWise member account. Fields marked * are required.</p>
@@ -7,6 +10,7 @@
             <?= htmlspecialchars($errors['form'] ?? ($success ?? ''), ENT_QUOTES, 'UTF-8') ?>
         </div>
 
+        <!-- FORM - submits a new account registration. -->
         <form id="register-form" action="<?= BASE_URL ?>register" data-api-url="<?= BASE_URL ?>api/auth/register" method="post">
             <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
             <div class="form-grid">
@@ -48,6 +52,7 @@
             </div>
             <p class="muted">Names may use letters and spaces only. Use an 11-digit phone number starting with 09. Passwords need at least 8 characters, one uppercase letter, one number, and one special character, with no spaces.</p>
             <p id="password-match" class="field-error" aria-live="polite"></p>
+            <!-- BUTTON - create member account. -->
             <button class="btn btn-primary" type="submit" style="width: 100%;">Create member account</button>
         </form>
         <p class="muted" style="text-align:center; margin-bottom:0;">

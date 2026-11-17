@@ -1,5 +1,8 @@
 <?php
+// This file handles the server-rendered loan pages.
+
 class Loans extends Controller {
+    // This method sets up this controller and its database tools.
     public function __construct() {
         parent::__construct();
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -7,6 +10,7 @@ class Loans extends Controller {
         }
     }
 
+    // This method loads the main information for this page or API.
     public function index() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_adult_services();
@@ -66,6 +70,7 @@ class Loans extends Controller {
         unset($_SESSION['loan_error'], $_SESSION['loan_success']);
     }
 
+    // This method checks and saves a member's loan application.
     public function apply() {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_adult_services();
@@ -135,6 +140,7 @@ class Loans extends Controller {
         exit;
     }
 
+    // This method creates a loan offer with the staff-selected rules.
     public function create_product() {
         $this->call->library('coopwise_access');
         $this->coopwise_access->require_staff();
@@ -172,6 +178,7 @@ class Loans extends Controller {
         exit;
     }
 
+    // This method updates a loan offer.
     public function update_product() {
         $this->call->library('coopwise_access');
         $this->coopwise_access->require_staff();
@@ -208,6 +215,7 @@ class Loans extends Controller {
         exit;
     }
 
+    // This method records the staff decision on a loan application.
     public function review($loan_id = null) {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_staff();
@@ -292,6 +300,7 @@ class Loans extends Controller {
         exit;
     }
 
+    // This method shows the loan's installment schedule.
     public function amortization($loan_id = null) {
         $this->call->library('coopwise_access');
         $user = $this->coopwise_access->require_adult_services();
@@ -338,12 +347,14 @@ class Loans extends Controller {
         ]);
     }
 
+    // This method returns to the loan page and shows the reason for the error.
     private function redirect_with_loan_error($message) {
         $_SESSION['loan_error'] = $message;
         header('Location: ' . BASE_URL . 'loans');
         exit;
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount) {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
             return false;
@@ -352,6 +363,7 @@ class Loans extends Controller {
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0');
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount) {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);
     }

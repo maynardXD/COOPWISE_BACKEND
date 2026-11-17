@@ -1,16 +1,20 @@
 <?php
+// This file reports whether the backend service and database are ready.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiHealth extends Controller
 {
     private $api;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
         $this->api = $this->call->library('api');
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->api->require_method('GET');
@@ -21,6 +25,7 @@ class ApiHealth extends Controller
         ]);
     }
 
+    // This method checks whether the backend and required database tables are ready.
     public function ready()
     {
         $this->api->require_method('GET');

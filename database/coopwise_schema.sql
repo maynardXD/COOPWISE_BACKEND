@@ -1,6 +1,8 @@
+-- This file creates the tables CoopWise uses to store accounts and financial records.
 CREATE DATABASE IF NOT EXISTS coopwise_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE coopwise_db;
 
+-- A user account can be linked to one cooperative member profile.
 CREATE TABLE IF NOT EXISTS users (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     email VARCHAR(255) NULL,
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY uq_users_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the members table.
 CREATE TABLE IF NOT EXISTS members (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NULL,
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS members (
     CONSTRAINT fk_members_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- These tables store savings activity and paid share-capital contributions.
 CREATE TABLE IF NOT EXISTS savings_transactions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -59,6 +63,7 @@ CREATE TABLE IF NOT EXISTS savings_transactions (
     CONSTRAINT fk_savings_created_by FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the share capital subscriptions table.
 CREATE TABLE IF NOT EXISTS share_capital_subscriptions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -79,6 +84,7 @@ CREATE TABLE IF NOT EXISTS share_capital_subscriptions (
     CONSTRAINT fk_share_capital_subscription_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the share capital transactions table.
 CREATE TABLE IF NOT EXISTS share_capital_transactions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -106,6 +112,7 @@ CREATE TABLE IF NOT EXISTS share_capital_transactions (
     CONSTRAINT fk_share_capital_transaction_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Loan offers, member applications, installment schedules, and payment history.
 CREATE TABLE IF NOT EXISTS loan_types (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(100) NOT NULL,
@@ -121,6 +128,7 @@ CREATE TABLE IF NOT EXISTS loan_types (
     UNIQUE KEY uq_loan_types_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the loans table.
 CREATE TABLE IF NOT EXISTS loans (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -147,6 +155,7 @@ CREATE TABLE IF NOT EXISTS loans (
     CONSTRAINT fk_loans_approver FOREIGN KEY (approved_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the loan schedules table.
 CREATE TABLE IF NOT EXISTS loan_schedules (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     loan_id INT UNSIGNED NOT NULL,
@@ -170,6 +179,7 @@ CREATE TABLE IF NOT EXISTS loan_schedules (
     CONSTRAINT fk_schedules_loan FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the loan payments table.
 CREATE TABLE IF NOT EXISTS loan_payments (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     loan_id INT UNSIGNED NOT NULL,
@@ -196,6 +206,7 @@ CREATE TABLE IF NOT EXISTS loan_payments (
     CONSTRAINT fk_payments_user FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- These tables keep cooperative returns separate from each member's claim history.
 CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     fiscal_year SMALLINT UNSIGNED NOT NULL,
@@ -220,6 +231,7 @@ CREATE TABLE IF NOT EXISTS cooperative_surplus_distributions (
         REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative member returns table.
 CREATE TABLE IF NOT EXISTS cooperative_member_returns (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     distribution_id INT UNSIGNED NOT NULL,
@@ -242,6 +254,7 @@ CREATE TABLE IF NOT EXISTS cooperative_member_returns (
         REFERENCES members(id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative loan interest distributions table.
 CREATE TABLE IF NOT EXISTS cooperative_loan_interest_distributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     loan_payment_id INT UNSIGNED NOT NULL,
@@ -257,6 +270,7 @@ CREATE TABLE IF NOT EXISTS cooperative_loan_interest_distributions (
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative loan interest returns table.
 CREATE TABLE IF NOT EXISTS cooperative_loan_interest_returns (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     distribution_id INT UNSIGNED NOT NULL,
@@ -277,6 +291,7 @@ CREATE TABLE IF NOT EXISTS cooperative_loan_interest_returns (
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Supporting records for reminders, reports, saved sessions, and automatic payments.
 CREATE TABLE IF NOT EXISTS notifications (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NULL,
@@ -291,6 +306,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the payment reminder log table.
 CREATE TABLE IF NOT EXISTS payment_reminder_log (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -310,6 +326,7 @@ CREATE TABLE IF NOT EXISTS payment_reminder_log (
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the activity logs table.
 CREATE TABLE IF NOT EXISTS activity_logs (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NULL,
@@ -323,6 +340,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     CONSTRAINT fk_activity_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the refresh tokens table.
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NOT NULL,
@@ -337,6 +355,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the auto pay runs table.
 CREATE TABLE IF NOT EXISTS auto_pay_runs (
     run_id CHAR(32) NOT NULL,
     status ENUM('running','completed','failed') NOT NULL DEFAULT 'running',
@@ -355,6 +374,7 @@ CREATE TABLE IF NOT EXISTS auto_pay_runs (
     KEY idx_auto_pay_runs_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative policies table.
 CREATE TABLE IF NOT EXISTS cooperative_policies (
     id TINYINT UNSIGNED NOT NULL,
     membership_policy TEXT NOT NULL,
@@ -383,6 +403,7 @@ VALUES
      'Paluwagan is demonstrated as a rotating contribution cycle. The system tracks contributions and payout order; staff confirmation credits the recipient’s demo balance only.',
      'This is not a bank account. Demo balance credits come from approved loan proceeds and confirmed Paluwagan payouts. Simulated withdrawals update the ledger but do not transfer money.');
 
+-- Daily cooperative contribution cycles and member payout order.
 CREATE TABLE IF NOT EXISTS cooperative_cycles (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(120) NOT NULL,
@@ -397,6 +418,7 @@ CREATE TABLE IF NOT EXISTS cooperative_cycles (
     CONSTRAINT fk_coop_cycles_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative cycle members table.
 CREATE TABLE IF NOT EXISTS cooperative_cycle_members (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,
@@ -410,6 +432,7 @@ CREATE TABLE IF NOT EXISTS cooperative_cycle_members (
     CONSTRAINT fk_coop_cycle_members_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative contributions table.
 CREATE TABLE IF NOT EXISTS cooperative_contributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,
@@ -429,6 +452,7 @@ CREATE TABLE IF NOT EXISTS cooperative_contributions (
     CONSTRAINT fk_coop_contributions_recorder FOREIGN KEY (recorded_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative payouts table.
 CREATE TABLE IF NOT EXISTS cooperative_payouts (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,
@@ -452,6 +476,7 @@ CREATE TABLE IF NOT EXISTS cooperative_payouts (
     CONSTRAINT fk_coop_payouts_recorder FOREIGN KEY (paid_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Online payment tracking and password reset codes.
 CREATE TABLE IF NOT EXISTS payment_transactions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
@@ -488,6 +513,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     CONSTRAINT fk_payment_transaction_subscription FOREIGN KEY (subscription_id) REFERENCES share_capital_subscriptions(id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the payment webhook events table.
 CREATE TABLE IF NOT EXISTS payment_webhook_events (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     provider_event_id VARCHAR(120) NOT NULL,
@@ -498,6 +524,7 @@ CREATE TABLE IF NOT EXISTS payment_webhook_events (
     UNIQUE KEY uq_payment_webhook_event (provider_event_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the password reset otps table.
 CREATE TABLE IF NOT EXISTS password_reset_otps (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NOT NULL,

@@ -1,10 +1,13 @@
 <?php
+// This file checks account roles and member access rules.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class Coopwise_access
 {
     private $lava;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         $this->lava = lava_instance();
@@ -13,6 +16,7 @@ class Coopwise_access
         $this->lava->call->model('Member_model');
     }
 
+    // This method calculates a member's age from their birth date.
     public static function age_from_birth_date($birth_date)
     {
         if (!is_string($birth_date) || $birth_date === '') {
@@ -33,6 +37,7 @@ class Coopwise_access
         return $date->diff($today)->y;
     }
 
+    // This method returns the account currently signed in.
     public function current_user()
     {
         if (empty($_SESSION['user_id'])) {
@@ -57,6 +62,7 @@ class Coopwise_access
         return $user;
     }
 
+    // This method checks that login is ready.
     public function require_login()
     {
         $user = $this->current_user();
@@ -69,6 +75,7 @@ class Coopwise_access
         return $user;
     }
 
+    // This method checks that the signed-in account has staff access.
     public function require_staff()
     {
         $user = $this->require_login();
@@ -83,6 +90,7 @@ class Coopwise_access
         return $user;
     }
 
+    // This method checks that adult services is ready.
     public function require_adult_services()
     {
         $user = $this->require_login();

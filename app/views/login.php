@@ -1,4 +1,6 @@
-<?php require APP_DIR . 'views/partials/header.php'; ?>
+<?php
+// This file displays the login page.
+ require APP_DIR . 'views/partials/header.php'; ?>
 <div class="login-wrap">
     <div class="login-card">
         <h2>Welcome back</h2>
@@ -8,6 +10,7 @@
             <?= htmlspecialchars($error ?: ($success ?? ''), ENT_QUOTES, 'UTF-8') ?>
         </div>
 
+        <!-- FORM - submits the sign-in details. -->
         <form id="login-form" action="<?= BASE_URL ?>login" data-api-url="<?= BASE_URL ?>api/auth/login" method="post">
             <input type="hidden" name="<?= htmlspecialchars(lava_instance()->security->get_csrf_token_name(), ENT_QUOTES, 'UTF-8') ?>" value="<?= htmlspecialchars(lava_instance()->security->get_csrf_hash(), ENT_QUOTES, 'UTF-8') ?>">
             <div style="margin-bottom: 18px;">
@@ -24,6 +27,7 @@
                 <input type="checkbox" name="remember" value="1">
                 Remember me on this device
             </label>
+            <!-- BUTTON - log in. -->
             <button class="btn btn-primary" type="submit" style="width: 100%;">Log In</button>
         </form>
         <p class="muted" style="text-align:center; margin: 18px 0 0;">

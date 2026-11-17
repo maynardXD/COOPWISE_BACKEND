@@ -1,4 +1,6 @@
 <?php
+// This file handles cooperative contribution cycles and payouts.
+
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 class ApiCooperative extends Controller
@@ -6,6 +8,7 @@ class ApiCooperative extends Controller
     private $api;
     private $db;
 
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -15,6 +18,7 @@ class ApiCooperative extends Controller
         $this->call->model('Member_model');
     }
 
+    // This method returns cooperative cycle and payout information.
     public function cycles()
     {
         $this->api->require_method('GET');
@@ -225,6 +229,7 @@ class ApiCooperative extends Controller
         ]);
     }
 
+    // This method creates a daily cooperative contribution cycle.
     public function create_cycle()
     {
         $this->api->require_method('POST');
@@ -314,6 +319,7 @@ class ApiCooperative extends Controller
         ], 201);
     }
 
+    // This method adds a member to a cooperative cycle.
     public function add_member()
     {
         $this->api->require_method('POST');
@@ -406,6 +412,7 @@ class ApiCooperative extends Controller
         ], 201);
     }
 
+    // This method removes a cooperative cycle that can still be cancelled.
     public function remove_cycle()
     {
         $this->api->require_method('DELETE');
@@ -461,6 +468,7 @@ class ApiCooperative extends Controller
         $this->api->respond(['message' => 'Draft cycle removed.']);
     }
 
+    // This method removes a member from a draft cooperative cycle.
     public function remove_member()
     {
         $this->api->require_method('DELETE');
@@ -496,6 +504,7 @@ class ApiCooperative extends Controller
         $this->api->respond(['message' => 'Member removed from the draft cycle.']);
     }
 
+    // This method starts a cooperative contribution cycle.
     public function activate_cycle()
     {
         $this->api->require_method('POST');
@@ -546,6 +555,7 @@ class ApiCooperative extends Controller
         $this->api->respond(['message' => 'Cycle activated.']);
     }
 
+    // This method confirms a payout and credits the member's demo balance.
     public function mark_payout_paid()
     {
         $this->api->require_method('POST');
@@ -639,6 +649,7 @@ class ApiCooperative extends Controller
         $this->api->respond(['message' => 'Paluwagan payout marked paid and added to the member’s available balance.']);
     }
 
+    // This method gets the account that is currently signed in.
     private function authenticated_user()
     {
         $claims = $this->api->require_jwt();
@@ -652,6 +663,7 @@ class ApiCooperative extends Controller
         return $user;
     }
 
+    // This method loads the member profile for the signed-in account.
     private function member_profile(array $user)
     {
         if ($user['role'] !== 'member') {
@@ -664,6 +676,7 @@ class ApiCooperative extends Controller
         return $member;
     }
 
+    // This method checks that the signed-in account has staff access.
     private function require_staff(array $user)
     {
         if (!in_array($user['role'], ['admin', 'officer'], true)) {
@@ -671,6 +684,7 @@ class ApiCooperative extends Controller
         }
     }
 
+    // This method saves a record of the user action.
     private function write_activity_log(int $user_id, string $module, string $action, array $details)
     {
         $id = $this->db->table('activity_logs')->insert([
@@ -684,6 +698,7 @@ class ApiCooperative extends Controller
         }
     }
 
+    // This method converts a money amount to cents for accurate calculations.
     private static function money_to_cents(string $amount)
     {
         if (!preg_match('/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/', $amount)) {
@@ -693,6 +708,7 @@ class ApiCooperative extends Controller
         return ((int) $whole * 100) + (int) str_pad($fraction, 2, '0', STR_PAD_LEFT);
     }
 
+    // This method formats cents.
     private static function format_cents(int $amount)
     {
         return intdiv($amount, 100) . '.' . str_pad((string) ($amount % 100), 2, '0', STR_PAD_LEFT);

@@ -1,12 +1,15 @@
+// This file sends server-rendered sign-in and registration forms to the backend.
 (() => {
     const messageBox = document.getElementById('form-message');
 
+    // Show the form result in the message area.
     function showMessage(message, success) {
         if (!messageBox) return;
         messageBox.textContent = message || '';
         messageBox.className = message ? (success ? 'success-message' : 'alert') : '';
     }
 
+    // Put validation errors beside the matching form fields.
     function renderErrors(errors) {
         if (!errors) return;
         Object.entries(errors).forEach(([name, message]) => {
@@ -27,6 +30,7 @@
         });
     }
 
+    // Send the form with fetch and show the backend response.
     async function submitViaLavaApi(form) {
         const button = form.querySelector('[type="submit"]');
         if (button) button.disabled = true;
@@ -57,6 +61,7 @@
         }
     }
 
+    // Send supported forms without reloading the whole page.
     document.querySelectorAll('form[data-api-url]').forEach((form) => {
         form.addEventListener('submit', (event) => {
             event.preventDefault();
@@ -69,6 +74,7 @@
     const confirmation = document.getElementById('password_confirmation');
     const matchMessage = document.getElementById('password-match');
     if (password && confirmation && matchMessage) {
+        // Tell the user when both password fields do not match.
         const checkMatch = () => {
             matchMessage.textContent = confirmation.value && password.value !== confirmation.value
                 ? 'Passwords do not match.'

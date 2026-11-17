@@ -1,3 +1,4 @@
+-- This upgrade adds member return claim tracking.
 USE coopwise_db;
 
 -- Apply after coopwise_cooperative_finance_upgrade.sql.

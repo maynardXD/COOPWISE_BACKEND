@@ -1,3 +1,4 @@
+-- This upgrade adjusts member balances for earlier cooperative payouts.
 -- Back up the database before running this migration.
 -- Adds previously confirmed Paluwagan payouts to each recipient's demo balance.
 

@@ -1,3 +1,4 @@
+-- This upgrade adds savings auto-payment settings and history.
 USE coopwise_db;
 
 SET @loan_autopay_exists = (
@@ -51,6 +52,7 @@ PREPARE coopwise_autopay_consent_updated_statement FROM @autopay_consent_updated
 EXECUTE coopwise_autopay_consent_updated_statement;
 DEALLOCATE PREPARE coopwise_autopay_consent_updated_statement;
 
+-- This statement creates the savings withdrawal requests table.
 CREATE TABLE IF NOT EXISTS savings_withdrawal_requests (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,

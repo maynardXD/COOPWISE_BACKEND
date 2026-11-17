@@ -1,3 +1,4 @@
+-- This upgrade adds loan product limits and cooperative cycles.
 USE coopwise_db;
 
 SET @loan_type_max_amount_exists = (
@@ -18,8 +19,10 @@ PREPARE coopwise_loan_type_max_amount_statement FROM @loan_type_max_amount_upgra
 EXECUTE coopwise_loan_type_max_amount_statement;
 DEALLOCATE PREPARE coopwise_loan_type_max_amount_statement;
 
+-- This statement updates the loan types table.
 ALTER TABLE loan_types ALTER COLUMN max_amount SET DEFAULT 0.00;
 
+-- This statement creates the cooperative cycles table.
 CREATE TABLE IF NOT EXISTS cooperative_cycles (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(120) NOT NULL,
@@ -34,6 +37,7 @@ CREATE TABLE IF NOT EXISTS cooperative_cycles (
     CONSTRAINT fk_coop_cycles_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative cycle members table.
 CREATE TABLE IF NOT EXISTS cooperative_cycle_members (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,
@@ -47,6 +51,7 @@ CREATE TABLE IF NOT EXISTS cooperative_cycle_members (
     CONSTRAINT fk_coop_cycle_members_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative contributions table.
 CREATE TABLE IF NOT EXISTS cooperative_contributions (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,
@@ -64,6 +69,7 @@ CREATE TABLE IF NOT EXISTS cooperative_contributions (
     CONSTRAINT fk_coop_contributions_recorder FOREIGN KEY (recorded_by_user_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- This statement creates the cooperative payouts table.
 CREATE TABLE IF NOT EXISTS cooperative_payouts (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     cycle_id INT UNSIGNED NOT NULL,

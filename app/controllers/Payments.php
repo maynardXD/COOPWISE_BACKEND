@@ -1,6 +1,9 @@
 <?php
+// This file loads the payments page.
+
 class Payments extends Controller
 {
+    // This method sets up this controller and its database tools.
     public function __construct()
     {
         parent::__construct();
@@ -9,6 +12,7 @@ class Payments extends Controller
         }
     }
 
+    // This method loads the main information for this page or API.
     public function index()
     {
         $this->call->library('coopwise_access');
