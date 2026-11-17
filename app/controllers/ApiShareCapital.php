@@ -54,6 +54,10 @@ class ApiShareCapital extends Controller
              ORDER BY s.created_at DESC, s.id DESC",
             $params
         )->fetchAll(PDO::FETCH_ASSOC);
+        $cooperative_paid_up = $this->db->raw(
+            "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END), 0) AS total
+             FROM share_capital_transactions"
+        )->fetch(PDO::FETCH_ASSOC);
 
         $pagination = $this->api->pagination_params();
         $transactions = $this->db->raw(
@@ -117,6 +121,9 @@ class ApiShareCapital extends Controller
                 'has_more' => $has_more
             ],
             'members' => $members,
+            'cooperative_paid_up_amount' => self::format_cents(
+                self::money_to_cents((string) ($cooperative_paid_up['total'] ?? '0.00'))
+            ),
             'share_par_value' => $share_par_value
                 ? self::format_cents(self::money_to_cents((string) $share_par_value['par_value']))
                 : null,
