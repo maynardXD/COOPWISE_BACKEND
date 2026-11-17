@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/lib/financial_workflows.php';
-require_once __DIR__ . '/lib/brevo_sms_reminders.php';
+require_once __DIR__ . '/lib/payment_reminders.php';
+
+date_default_timezone_set('Asia/Manila');
 
 $database = [
     'host' => getenv('DB_HOST') ?: '127.0.0.1',
@@ -42,7 +44,11 @@ $processed = [
     'partial_loan_installments' => 0,
     'skipped_loan_installments' => 0,
     'skipped_paluwagan_contributions' => 0,
-    'errors' => 0
+    'errors' => 0,
+    'payment_reminder_emails_sent' => 0,
+    'payment_reminder_email_failures' => 0,
+    'payment_reminder_items_sent' => 0,
+    'payment_reminder_invalid_emails' => 0
 ];
 try {
     $members = $db->query(
@@ -231,13 +237,17 @@ foreach ($members as $member) {
     }
 }
 
+$reminderError = null;
 try {
-    $processed['sms_reminders'] = coopwiseProcessPaymentSmsReminders($db);
+    $processed = array_merge($processed, sendDailyPaymentReminders($db));
 } catch (Throwable $error) {
-    $processed['sms_reminders'] = ['status' => 'failed', 'attempted' => 0, 'sent' => 0, 'failed' => 0];
-    error_log('CoopWise Brevo SMS reminder job failed: ' . $error->getMessage());
+    $processed['payment_reminder_email_failures']++;
+    $reminderError = $error;
+    error_log('CoopWise payment reminder run failed: ' . $error->getMessage());
 }
 
+$totalErrors = $processed['errors'] + $processed['payment_reminder_email_failures']
+    + $processed['payment_reminder_invalid_emails'];
 try {
     $db->prepare(
         'UPDATE auto_pay_runs SET status = ?, completed_at = ?, members_checked = ?,
@@ -245,7 +255,7 @@ try {
             skipped_loan_installments = ?, skipped_paluwagan_contributions = ?, error_count = ?, details = ?
          WHERE run_id = ?'
     )->execute([
-        $processed['errors'] > 0 ? 'failed' : 'completed',
+        $totalErrors > 0 ? 'failed' : 'completed',
         date('Y-m-d H:i:s'),
         $processed['members_checked'],
         $processed['loan_installments'],
@@ -253,7 +263,7 @@ try {
         $processed['partial_loan_installments'],
         $processed['skipped_loan_installments'],
         $processed['skipped_paluwagan_contributions'],
-        $processed['errors'],
+        $totalErrors,
         json_encode($processed, JSON_UNESCAPED_SLASHES),
         $runId
     ]);
@@ -262,9 +272,9 @@ try {
     exit(1);
 }
 $processed['run_id'] = $runId;
-$processed['status'] = $processed['errors'] > 0 ? 'failed' : 'completed';
+$processed['status'] = $totalErrors > 0 ? 'failed' : 'completed';
 echo json_encode($processed, JSON_UNESCAPED_SLASHES) . PHP_EOL;
-if ($processed['errors'] > 0) {
+if ($reminderError instanceof Throwable || $totalErrors > 0) {
     exit(1);
 }
 

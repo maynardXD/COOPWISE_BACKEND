@@ -2,6 +2,7 @@
 defined('PREVENT_DIRECT_ACCESS') OR exit('No direct script access allowed');
 
 require_once dirname(__DIR__, 2) . '/scripts/lib/cooperative_finance.php';
+require_once dirname(__DIR__, 2) . '/scripts/lib/brevo_email.php';
 
 class ApiLoans extends Controller
 {
@@ -299,11 +300,85 @@ class ApiLoans extends Controller
         ], 201);
     }
 
+    public function email_payment_details($loan_id = null)
+    {
+        $this->api->require_method('POST');
+        $user = $this->authenticated_user();
+        $this->require_staff($user);
+        $this->require_finance_schema();
+        $loan_id = filter_var($loan_id, FILTER_VALIDATE_INT);
+        if (!$loan_id || $loan_id < 1) {
+            $this->api->respond_error('Choose a valid loan.', 422);
+        }
+        $this->api->rate_limit('loan-payment-details-email:' . (int) $user['id'] . ':' . $loan_id, 5, 3600);
+
+        $loan = $this->db->raw(
+            'SELECT l.id, l.member_id, l.loan_code, l.principal_amount, l.approved_amount,
+                    l.current_balance, l.total_paid, l.interest_rate, l.term_months, l.purpose,
+                    l.status, l.created_at, lt.name AS loan_type_name,
+                    m.member_number, m.first_name, m.last_name,
+                    u.email AS account_email, u.status AS account_status
+             FROM loans l
+             INNER JOIN loan_types lt ON lt.id = l.loan_type_id
+             INNER JOIN members m ON m.id = l.member_id
+             LEFT JOIN users u ON u.id = m.user_id
+             WHERE l.id = ?',
+            [(int) $loan_id]
+        )->fetch(PDO::FETCH_ASSOC);
+        if (!$loan) {
+            $this->api->respond_error('Loan not found.', 404);
+        }
+        if (!in_array($loan['status'], ['approved', 'active', 'completed'], true)) {
+            $this->api->respond_error('Payment details are available after a loan is approved.', 409);
+        }
+        if ($loan['account_status'] !== 'active'
+            || !filter_var((string) $loan['account_email'], FILTER_VALIDATE_EMAIL)) {
+            $this->api->respond_error('The member needs an active account with a valid email address.', 409);
+        }
+
+        $schedule = $this->db->raw(
+            'SELECT due_date, principal_due, interest_due, total_due, paid_amount, status
+             FROM loan_schedules
+             WHERE loan_id = ?
+             ORDER BY due_date ASC, id ASC',
+            [(int) $loan_id]
+        )->fetchAll(PDO::FETCH_ASSOC);
+        $email = self::loan_payment_email_content($loan, $schedule);
+        $delivery = sendBrevoTransactionalEmail(
+            (string) $loan['account_email'],
+            $email['subject'],
+            $email['htmlContent'],
+            $email['textContent']
+        );
+        if (!$delivery['sent']) {
+            error_log(
+                'CoopWise loan payment-details email failed; loan_id=' . (int) $loan_id .
+                '; staff_user_id=' . (int) $user['id'] . '; error=' . $delivery['error_code']
+            );
+            if ($delivery['error_code'] === 'configuration_missing') {
+                $this->api->respond_error('Loan email is not configured. Check the Brevo sender settings on the backend.', 503);
+            }
+            $this->api->respond_error('Brevo did not accept the loan details email. Please try again later.', 502);
+        }
+
+        $this->api->respond([
+            'message' => 'Loan payment details email was accepted for delivery to the member’s account email.'
+        ], 201);
+    }
+
     public function loans()
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
+        $requested_status = '';
+        if (!$member) {
+            $requested_status = trim((string) ($_GET['status'] ?? ''));
+            if ($requested_status !== ''
+                && !in_array($requested_status, ['pending', 'approved', 'active', 'completed', 'rejected'], true)) {
+                $this->api->respond_error('Choose a valid loan status filter.', 422);
+            }
+        }
         $pending_query = $this->db->table('loans')->where('status', 'pending');
         if ($member) {
             $pending_query->where('member_id', (int) $member['id']);
@@ -326,6 +401,8 @@ class ApiLoans extends Controller
             ->inner_join('members m', 'm.id = l.member_id');
         if ($member) {
             $query->where('l.member_id', (int) $member['id']);
+        } elseif ($requested_status !== '') {
+            $query->where('l.status', $requested_status);
         }
         $pagination = $this->api->pagination_params();
         $loans = $query->order_by('l.created_at', 'DESC')
@@ -810,6 +887,108 @@ class ApiLoans extends Controller
         if (!$id) {
             throw new RuntimeException('The loan audit record could not be saved.');
         }
+    }
+
+    private static function loan_payment_email_content(array $loan, array $schedule): array
+    {
+        $escape = static function ($value): string {
+            return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        };
+        $formatAmount = static function (string $amount): string {
+            $cents = self::money_to_cents($amount);
+            if ($cents === false) {
+                throw new RuntimeException('A stored loan amount is invalid.');
+            }
+            return self::format_cents($cents);
+        };
+        $memberName = trim((string) $loan['first_name'] . ' ' . (string) $loan['last_name']);
+        $loanBalanceCents = self::money_to_cents((string) $loan['current_balance']);
+        $totalPaidCents = self::money_to_cents((string) $loan['total_paid']);
+        if ($loanBalanceCents === false || $totalPaidCents === false) {
+            throw new RuntimeException('A stored loan balance is invalid.');
+        }
+
+        $details = [
+            'Loan ID' => (string) $loan['loan_code'],
+            'Loan record number' => (string) $loan['id'],
+            'Member' => $memberName,
+            'Member ID' => (string) $loan['member_number'],
+            'Loan offer' => (string) $loan['loan_type_name'],
+            'Status' => ucfirst((string) $loan['status']),
+            'Date applied' => (string) $loan['created_at'],
+            'Requested amount' => 'PHP ' . $formatAmount((string) $loan['principal_amount']),
+            'Approved amount' => 'PHP ' . $formatAmount((string) $loan['approved_amount']),
+            'Current loan balance' => 'PHP ' . self::format_cents($loanBalanceCents),
+            'Total paid' => 'PHP ' . self::format_cents($totalPaidCents),
+            'Interest rate' => (string) $loan['interest_rate'] . '% monthly',
+            'Term' => (string) $loan['term_months'] . ' months',
+            'Purpose' => trim((string) ($loan['purpose'] ?? '')) ?: 'Not specified'
+        ];
+
+        $scheduleRows = '';
+        $scheduleText = [];
+        $nextDueDate = null;
+        foreach ($schedule as $installment) {
+            $dueCents = self::money_to_cents((string) $installment['total_due']);
+            $paidCents = self::money_to_cents((string) $installment['paid_amount']);
+            if ($dueCents === false || $paidCents === false) {
+                throw new RuntimeException('A stored installment amount is invalid.');
+            }
+            $remainingCents = max(0, $dueCents - $paidCents);
+            $installmentStatus = ucfirst((string) $installment['status']);
+            if ($nextDueDate === null && $remainingCents > 0
+                && in_array($installment['status'], ['pending', 'overdue'], true)) {
+                $nextDueDate = (string) $installment['due_date'];
+            }
+            $scheduleRows .= '<tr><td>' . $escape($installment['due_date']) .
+                '</td><td>PHP ' . $escape($formatAmount((string) $installment['principal_due'])) .
+                '</td><td>PHP ' . $escape($formatAmount((string) $installment['interest_due'])) .
+                '</td><td>PHP ' . $escape($formatAmount((string) $installment['total_due'])) .
+                '</td><td>PHP ' . $escape(self::format_cents($paidCents)) .
+                '</td><td>PHP ' . $escape(self::format_cents($remainingCents)) .
+                '</td><td>' . $escape($installmentStatus) . '</td></tr>';
+            $scheduleText[] = $installment['due_date'] . ' | Principal PHP ' .
+                $formatAmount((string) $installment['principal_due']) . ' | Interest PHP ' .
+                $formatAmount((string) $installment['interest_due']) . ' | Due PHP ' .
+                $formatAmount((string) $installment['total_due']) . ' | Paid PHP ' .
+                self::format_cents($paidCents) . ' | Remaining PHP ' .
+                self::format_cents($remainingCents) . ' | ' . $installmentStatus;
+        }
+        $details['Next due date'] = $nextDueDate ?: 'No outstanding scheduled installment';
+
+        $detailRows = '';
+        $detailText = [];
+        foreach ($details as $label => $value) {
+            $detailRows .= '<tr><th align="left">' . $escape($label) . '</th><td>' .
+                $escape($value) . '</td></tr>';
+            $detailText[] = $label . ': ' . $value;
+        }
+
+        $scheduleHtml = $scheduleRows !== ''
+            ? '<table border="1" cellpadding="6" cellspacing="0"><thead><tr>' .
+                '<th>Due date</th><th>Principal</th><th>Interest</th><th>Installment</th>' .
+                '<th>Paid</th><th>Remaining</th><th>Status</th></tr></thead><tbody>' .
+                $scheduleRows . '</tbody></table>'
+            : '<p>No repayment installments are recorded for this loan.</p>';
+        $schedulePlainText = $scheduleText !== []
+            ? implode("\n", $scheduleText)
+            : 'No repayment installments are recorded for this loan.';
+        $asOf = (new DateTimeImmutable('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d H:i:s');
+
+        return [
+            'subject' => 'CoopWise loan payment details: ' . (string) $loan['loan_code'],
+            'htmlContent' => '<!doctype html><html><body><p>Hello ' . $escape($memberName) .
+                ',</p><p>Here are the current details and repayment schedule for your loan, as of ' .
+                $escape($asOf) . '.</p><table border="1" cellpadding="6" cellspacing="0"><tbody>' .
+                $detailRows . '</tbody></table><h3>Repayment schedule</h3>' . $scheduleHtml .
+                '<p>If you have already made a payment, allow time for the cooperative to update its records. ' .
+                'Contact cooperative staff if anything looks incorrect.</p><p>CoopWise</p></body></html>',
+            'textContent' => "Hello {$memberName},\n\nHere are the current details and repayment " .
+                "schedule for your loan, as of {$asOf}.\n\n" . implode("\n", $detailText) .
+                "\n\nRepayment schedule:\n" . $schedulePlainText .
+                "\n\nIf you have already made a payment, allow time for the cooperative to update its records. " .
+                "Contact cooperative staff if anything looks incorrect.\n\nCoopWise"
+        ];
     }
 
     private function latest_readiness(int $member_id)

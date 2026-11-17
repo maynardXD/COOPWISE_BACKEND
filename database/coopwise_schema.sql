@@ -24,9 +24,6 @@ CREATE TABLE IF NOT EXISTS members (
     email VARCHAR(255) NULL,
     address VARCHAR(255) NULL,
     contact_number VARCHAR(30) NULL,
-    sms_payment_reminders_enabled TINYINT(1) NOT NULL DEFAULT 0,
-    sms_payment_reminders_consented_at DATETIME NULL,
-    sms_payment_reminders_revoked_at DATETIME NULL,
     birth_date DATE NULL,
     gender ENUM('male','female','other') NULL,
     status ENUM('active','inactive','suspended') NOT NULL DEFAULT 'active',
@@ -238,7 +235,7 @@ CREATE TABLE IF NOT EXISTS cooperative_member_returns (
 CREATE TABLE IF NOT EXISTS notifications (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NULL,
-    type ENUM('sms','system','alert') NOT NULL DEFAULT 'system',
+    type ENUM('system','alert') NOT NULL DEFAULT 'system',
     title VARCHAR(120) NOT NULL,
     message TEXT NOT NULL,
     is_read TINYINT(1) NOT NULL DEFAULT 0,
@@ -249,22 +246,21 @@ CREATE TABLE IF NOT EXISTS notifications (
     CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS sms_payment_reminder_logs (
+CREATE TABLE IF NOT EXISTS payment_reminder_log (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     member_id INT UNSIGNED NOT NULL,
     reminder_type ENUM('loan_installment','paluwagan_contribution') NOT NULL,
-    reference_id BIGINT UNSIGNED NOT NULL,
-    reference_date DATE NOT NULL,
-    status ENUM('pending','sent','failed') NOT NULL DEFAULT 'pending',
-    provider_message_id VARCHAR(120) NULL,
-    provider_status SMALLINT UNSIGNED NULL,
-    error_code VARCHAR(40) NULL,
-    attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source_id INT UNSIGNED NOT NULL,
+    due_date DATE NOT NULL,
+    status ENUM('sent','failed') NOT NULL,
+    attempt_count INT UNSIGNED NOT NULL DEFAULT 1,
+    last_attempt_at DATETIME NOT NULL,
     sent_at DATETIME NULL,
+    last_error_code VARCHAR(64) NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uq_sms_payment_reminder (member_id, reminder_type, reference_id, reference_date),
-    KEY idx_sms_payment_reminder_status (status, attempted_at),
-    CONSTRAINT fk_sms_payment_reminder_member
+    UNIQUE KEY uq_payment_reminder_item (member_id, reminder_type, source_id, due_date),
+    KEY idx_payment_reminder_status_attempt (status, last_attempt_at),
+    CONSTRAINT fk_payment_reminder_member
         FOREIGN KEY (member_id) REFERENCES members(id)
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
