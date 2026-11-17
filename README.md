@@ -56,19 +56,17 @@ reuse its branding, images, or website copy.
    table and inserts its default row only if that row is absent.
    Then run `database/coopwise_cooperative_finance_upgrade.sql` to add
    configurable loan-eligibility rules, principal/interest repayment
-   breakdowns, and annual surplus/member returns. An unpublished draft can be
-   cancelled and recalculated. Follow it with
+   breakdowns, and the supporting member-return tables. The frontend no longer
+   exposes annual distribution draft controls; previously approved member
+   returns remain visible and claimable. Follow it with
    `database/coopwise_member_return_claims_upgrade.sql` to enable one-time
    transfers of approved returns to savings or share capital. Loan capacity
    is calculated from paid-up share capital plus collected interest, less
    outstanding principal and pending applications; repayments restore
    capacity. Member share ownership balances are not erased on disbursement.
    Existing lending-pool tables, if present, are legacy history and are no
-   longer read or updated; do not drop them as part of this change. Surplus
-   calculations remain drafts until staff approval; the classroom patronage
-   basis is loan interest paid during the fiscal year. Verify actual bylaws,
-   accounting, and required approvals before applying any real cooperative
-   rules.
+   longer read or updated; do not drop them as part of this change. Verify
+   actual bylaws and accounting before applying any cooperative rules.
    Then run `database/coopwise_loan_overdue_interest_upgrade.sql` to add annual
    overdue-interest rates and accrual tracking. New loan products default to
    6% per year for future applications; existing loans retain 0% so their
