@@ -86,9 +86,15 @@ function cooperativeLoanCapitalCapacity(
     int $paidUpShareCapital,
     int $collectedInterest,
     int $outstandingPrincipal,
-    int $pendingPrincipal = 0
+    int $pendingPrincipal = 0,
+    int $distributedInterest = 0
 ): int {
-    return max(0, $paidUpShareCapital + $collectedInterest - $outstandingPrincipal - $pendingPrincipal);
+    if ($distributedInterest < 0 || $distributedInterest > $collectedInterest) {
+        throw new InvalidArgumentException('Distributed loan interest cannot exceed collected interest.');
+    }
+
+    $lendableInterest = $collectedInterest - $distributedInterest;
+    return max(0, $paidUpShareCapital + $lendableInterest - $outstandingPrincipal - $pendingPrincipal);
 }
 
 function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null): array
@@ -101,6 +107,9 @@ function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null)
              FROM share_capital_transactions) AS paid_up_share_capital,
             (SELECT COALESCE(SUM(interest_paid), 0)
              FROM loan_payments WHERE breakdown_recorded = 1) AS collected_interest,
+            (SELECT COALESCE(SUM(interest_amount), 0)
+             FROM cooperative_loan_interest_distributions
+             WHERE status = 'allocated') AS distributed_interest,
             (SELECT COALESCE(SUM(GREATEST(s.principal_due - s.principal_paid, 0)), 0)
              FROM loan_schedules s
              INNER JOIN loans l ON l.id = s.loan_id
@@ -115,16 +124,165 @@ function cooperativeAvailableLoanCapital($db, ?int $excludePendingLoanId = null)
 
     $paidUp = cooperativeMoneyToCents((string) $row['paid_up_share_capital']);
     $interest = cooperativeMoneyToCents((string) $row['collected_interest']);
+    $distributedInterest = cooperativeMoneyToCents((string) $row['distributed_interest']);
+    if ($distributedInterest > $interest) {
+        throw new RuntimeException('Distributed loan interest exceeds the recorded collected interest.');
+    }
     $outstanding = cooperativeMoneyToCents((string) $row['outstanding_principal']);
     $pending = cooperativeMoneyToCents((string) $row['pending_principal']);
 
     return [
         'paid_up_share_capital' => $paidUp,
         'collected_interest' => $interest,
+        'distributed_interest' => $distributedInterest,
+        'lendable_interest' => max(0, $interest - $distributedInterest),
         'outstanding_principal' => $outstanding,
         'pending_principal' => $pending,
-        'available' => cooperativeLoanCapitalCapacity($paidUp, $interest, $outstanding, $pending)
+        'available' => cooperativeLoanCapitalCapacity(
+            $paidUp,
+            $interest,
+            $outstanding,
+            $pending,
+            $distributedInterest
+        )
     ];
+}
+
+function cooperativeEqualInterestAllocations(int $interestCents, array $memberIds, int $rotation = 0): array
+{
+    if ($interestCents < 0) {
+        throw new InvalidArgumentException('Loan interest cannot be negative.');
+    }
+
+    $memberIds = array_values(array_unique(array_filter(
+        array_map('intval', $memberIds),
+        static function (int $memberId): bool {
+            return $memberId > 0;
+        }
+    )));
+    sort($memberIds, SORT_NUMERIC);
+    if ($interestCents === 0 || !$memberIds) {
+        return [];
+    }
+
+    $share = intdiv($interestCents, count($memberIds));
+    $remainder = $interestCents % count($memberIds);
+    $allocations = array_fill_keys($memberIds, $share);
+    $start = (($rotation % count($memberIds)) + count($memberIds)) % count($memberIds);
+    for ($index = 0; $index < $remainder; $index++) {
+        $memberId = $memberIds[($start + $index) % count($memberIds)];
+        $allocations[$memberId]++;
+    }
+
+    return $allocations;
+}
+
+function cooperativeFinanceStatement($db, string $sql, array $params = [])
+{
+    if ($db instanceof PDO) {
+        $statement = $db->prepare($sql);
+        $statement->execute($params);
+        return $statement;
+    }
+
+    return $db->raw($sql, $params);
+}
+
+function cooperativeRecordLoanInterestDistribution($db, int $loanPaymentId, int $interestCents): ?int
+{
+    if ($loanPaymentId < 1 || $interestCents < 0) {
+        throw new InvalidArgumentException('A valid loan payment and non-negative interest amount are required.');
+    }
+    if ($interestCents === 0) {
+        return null;
+    }
+
+    $existing = cooperativeFinanceStatement(
+        $db,
+        'SELECT id, interest_amount FROM cooperative_loan_interest_distributions WHERE loan_payment_id = ? FOR UPDATE',
+        [$loanPaymentId]
+    )->fetch(PDO::FETCH_ASSOC);
+    if ($existing) {
+        if (cooperativeMoneyToCents((string) $existing['interest_amount']) !== $interestCents) {
+            throw new RuntimeException('An existing loan-interest distribution does not match the recorded payment.');
+        }
+        return (int) $existing['id'];
+    }
+
+    $activeMembers = cooperativeFinanceStatement(
+        $db,
+        "SELECT id FROM members WHERE status = 'active' ORDER BY id"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    $memberIds = array_map('intval', $activeMembers);
+    $paidUpByMember = [];
+    if ($memberIds) {
+        $placeholders = implode(',', array_fill(0, count($memberIds), '?'));
+        $paidUpRows = cooperativeFinanceStatement(
+            $db,
+            "SELECT member_id,
+                    SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END) AS paid_up_amount
+             FROM share_capital_transactions
+             WHERE member_id IN ($placeholders)
+             GROUP BY member_id
+             HAVING SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END) > 0",
+            $memberIds
+        )->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($paidUpRows as $row) {
+            $paidUpByMember[(int) $row['member_id']] = true;
+        }
+    }
+    $eligibleMemberIds = array_values(array_filter(
+        $memberIds,
+        static function (int $memberId) use ($paidUpByMember): bool {
+            return isset($paidUpByMember[$memberId]);
+        }
+    ));
+    $distributionId = cooperativeFinanceInsert($db, 'cooperative_loan_interest_distributions', [
+        'loan_payment_id' => $loanPaymentId,
+        'interest_amount' => cooperativeFormatCents($interestCents),
+        'eligible_investor_count' => count($eligibleMemberIds),
+        'status' => $eligibleMemberIds ? 'allocated' : 'retained'
+    ]);
+    if ($distributionId < 1) {
+        throw new RuntimeException('The loan-interest distribution could not be recorded.');
+    }
+
+    $allocations = cooperativeEqualInterestAllocations(
+        $interestCents,
+        $eligibleMemberIds,
+        $loanPaymentId
+    );
+    foreach ($allocations as $memberId => $amount) {
+        $returnId = cooperativeFinanceInsert($db, 'cooperative_loan_interest_returns', [
+            'distribution_id' => $distributionId,
+            'member_id' => (int) $memberId,
+            'amount' => cooperativeFormatCents($amount),
+            'claim_status' => 'available'
+        ]);
+        if ($returnId < 1) {
+            throw new RuntimeException('An investor loan-interest return could not be recorded.');
+        }
+    }
+
+    return $distributionId;
+}
+
+function cooperativeFinanceInsert($db, string $table, array $values): int
+{
+    if ($db instanceof PDO) {
+        $columns = array_keys($values);
+        $quotedColumns = implode(', ', array_map(static function (string $column): string {
+            return '`' . $column . '`';
+        }, $columns));
+        $placeholders = implode(', ', array_fill(0, count($columns), '?'));
+        $statement = $db->prepare(
+            'INSERT INTO `' . $table . '` (' . $quotedColumns . ') VALUES (' . $placeholders . ')'
+        );
+        $statement->execute(array_values($values));
+        return (int) $db->lastInsertId();
+    }
+
+    return (int) $db->table($table)->insert($values);
 }
 
 function cooperativeSimulatedMembershipDays(int $elapsedSeconds, int $realSecondsPerDay = 6): int

@@ -37,7 +37,9 @@ class ApiHealth extends Controller
                 'auto_pay_runs',
                 'cooperative_policies',
                 'cooperative_surplus_distributions',
-                'cooperative_member_returns'
+                'cooperative_member_returns',
+                'cooperative_loan_interest_distributions',
+                'cooperative_loan_interest_returns'
             ];
             $placeholders = implode(',', array_fill(0, count($required_tables), '?'));
             $tables = $db->raw(
@@ -65,7 +67,17 @@ class ApiHealth extends Controller
                 ['loan_schedules', 'interest_paid'],
                 ['cooperative_member_returns', 'claim_status'],
                 ['cooperative_member_returns', 'claimed_at'],
-                ['cooperative_member_returns', 'claim_reference']
+                ['cooperative_member_returns', 'claim_reference'],
+                ['cooperative_loan_interest_distributions', 'loan_payment_id'],
+                ['cooperative_loan_interest_distributions', 'interest_amount'],
+                ['cooperative_loan_interest_distributions', 'eligible_investor_count'],
+                ['cooperative_loan_interest_distributions', 'status'],
+                ['cooperative_loan_interest_returns', 'distribution_id'],
+                ['cooperative_loan_interest_returns', 'member_id'],
+                ['cooperative_loan_interest_returns', 'amount'],
+                ['cooperative_loan_interest_returns', 'claim_status'],
+                ['cooperative_loan_interest_returns', 'claimed_at'],
+                ['cooperative_loan_interest_returns', 'claim_reference']
             ];
             $column_conditions = [];
             $column_parameters = [];

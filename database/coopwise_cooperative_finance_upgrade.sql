@@ -2,7 +2,7 @@ USE coopwise_db;
 
 -- Apply after coopwise_policies_upgrade.sql and the existing loan/share-capital upgrades.
 -- Adds structured demo loan rules, repayment splits, and draft/approved
--- member-return records. Loan capacity is calculated from share capital.
+-- member-return records. Lending capacity uses paid-up share capital and collected interest.
 
 SET @finance_columns = (
     SELECT COUNT(*) FROM information_schema.columns

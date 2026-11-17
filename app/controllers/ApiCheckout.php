@@ -93,6 +93,9 @@ class ApiCheckout extends Controller
             || ($purpose === 'savings' && ($loan_id || $cycle_id || $subscription_id))) {
             $this->api->respond_error('Choose only the account or cycle related to this payment.', 422);
         }
+        if ($purpose === 'loan') {
+            $this->require_loan_interest_schema();
+        }
         if ($purpose === 'savings' && ($payment_method !== 'xendit' || self::xendit_mode() !== 'test')) {
             $this->api->respond_error('Online savings deposits are not available for this transaction.', 403);
         }
@@ -859,6 +862,11 @@ class ApiCheckout extends Controller
 
     private function apply_loan_payment(array $payment)
     {
+        if (!$this->loan_interest_schema_ready()) {
+            throw new RuntimeException(
+                'Loan-interest returns are not configured. Apply database/coopwise_loan_interest_returns_upgrade.sql.'
+            );
+        }
         $loan = $this->db->raw('SELECT * FROM loans WHERE id = ? FOR UPDATE', [(int) $payment['loan_id']])
             ->fetch(PDO::FETCH_ASSOC);
         $amount = self::money_to_cents((string) $payment['amount']);
@@ -964,6 +972,11 @@ class ApiCheckout extends Controller
         if (!$inserted) {
             throw new RuntimeException('The confirmed loan payment could not be recorded.');
         }
+        cooperativeRecordLoanInterestDistribution(
+            $this->db,
+            (int) $inserted,
+            $interest_paid
+        );
         $new_balance = $balance - $principal_paid - $interest_paid;
         $this->db->table('loans')->where('id', (int) $loan['id'])->update([
             'current_balance' => self::format_cents($new_balance),
@@ -1179,6 +1192,38 @@ class ApiCheckout extends Controller
                 503
             );
         }
+    }
+
+    private function require_loan_interest_schema()
+    {
+        if (!$this->loan_interest_schema_ready()) {
+            error_log('CoopWise loan-interest return schema is missing; apply database/coopwise_loan_interest_returns_upgrade.sql.');
+            $this->api->respond_error(
+                'Loan-interest returns are not configured. Back up the database, then run database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
+                503
+            );
+        }
+    }
+
+    private function loan_interest_schema_ready(): bool
+    {
+        $tables = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name IN ('cooperative_loan_interest_distributions', 'cooperative_loan_interest_returns')"
+        )->fetchColumn();
+        $columns = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND (
+                 (table_name = 'cooperative_loan_interest_distributions' AND column_name IN (
+                     'loan_payment_id', 'interest_amount', 'eligible_investor_count', 'status'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_returns' AND column_name IN (
+                     'distribution_id', 'member_id', 'amount', 'claim_status', 'claimed_at', 'claim_reference'
+                 ))
+             )"
+        )->fetchColumn();
+        return (int) $tables === 2 && (int) $columns === 10;
     }
 
     private static function xendit_mode()

@@ -60,10 +60,7 @@ reuse its branding, images, or website copy.
    exposes annual distribution draft controls; previously approved member
    returns remain visible and claimable. Follow it with
    `database/coopwise_member_return_claims_upgrade.sql` to enable one-time
-   transfers of approved returns to savings or share capital. Loan capacity
-   is calculated from paid-up share capital plus collected interest, less
-   outstanding principal and pending applications; repayments restore
-   capacity. Member share ownership balances are not erased on disbursement.
+   transfers of approved returns to savings or share capital.
    Existing lending-pool tables, if present, are legacy history and are no
    longer read or updated; do not drop them as part of this change. Verify
    actual bylaws and accounting before applying any cooperative rules.
@@ -80,6 +77,21 @@ reuse its branding, images, or website copy.
    installment's principal. Partial payments are allocated to overdue
    interest, scheduled interest, then principal. Scheduled reminders and
    manual loan-detail emails disclose the rate and accrued charge.
+   New databases receive the loan-interest return tables from
+   `database/coopwise_schema.sql`; for an existing database, run
+   `database/coopwise_loan_interest_returns_upgrade.sql` after the
+   cooperative-finance and overdue-interest upgrades. In this classroom
+   simulation, future regular loan interest is allocated equally to active
+   members with positive paid-up share capital when repayment is recorded. Any
+   remainder cent rotates deterministically among investors; overdue penalties
+   are excluded. Allocated interest is not counted again as lendable capital.
+   Historical interest is not redistributed by the upgrade. Members can claim
+   available loan-interest returns to savings or reinvest them as share
+   capital. This is separate from reviewed annual-surplus distributions and
+   is not a guaranteed formal dividend. Lending capacity is calculated from
+   paid-up share capital plus unallocated collected interest, less outstanding
+   principal and pending applications; repayments restore principal capacity.
+   Member share ownership balances are not erased on disbursement.
    Run `database/coopwise_terms_acceptance_upgrade.sql` to add the first-login
    terms status. Existing accounts are exempted by the migration; new accounts
    are asked to review and accept the current terms before reaching the portal.

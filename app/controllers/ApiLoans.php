@@ -24,8 +24,17 @@ class ApiLoans extends Controller
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
         $this->require_finance_schema();
-        $availableCapital = cooperativeAvailableLoanCapital($this->db)['available'];
+        $loanCapital = cooperativeAvailableLoanCapital($this->db);
+        $availableCapital = $loanCapital['available'];
         $availableCapitalFormatted = self::format_cents($availableCapital);
+        $loanCapitalBreakdown = [
+            'paid_up_share_capital' => self::format_cents($loanCapital['paid_up_share_capital']),
+            'collected_interest' => self::format_cents($loanCapital['collected_interest']),
+            'distributed_interest' => self::format_cents($loanCapital['distributed_interest']),
+            'lendable_interest' => self::format_cents($loanCapital['lendable_interest']),
+            'outstanding_principal' => self::format_cents($loanCapital['outstanding_principal']),
+            'pending_principal' => self::format_cents($loanCapital['pending_principal'])
+        ];
         $readiness = null;
         if ($user['role'] === 'member') {
             $member = $this->member_profile($user);
@@ -34,7 +43,8 @@ class ApiLoans extends Controller
                 $this->api->respond([
                     'products' => [],
                     'loan_readiness' => $readiness,
-                    'available_loan_capital' => $availableCapitalFormatted
+                    'available_loan_capital' => $availableCapitalFormatted,
+                    'loan_capital_breakdown' => $loanCapitalBreakdown
                 ]);
             }
         }
@@ -53,7 +63,8 @@ class ApiLoans extends Controller
         $this->api->respond([
             'products' => $products,
             'loan_readiness' => $readiness,
-            'available_loan_capital' => $availableCapitalFormatted
+            'available_loan_capital' => $availableCapitalFormatted,
+            'loan_capital_breakdown' => $loanCapitalBreakdown
         ]);
     }
 
@@ -284,6 +295,11 @@ class ApiLoans extends Controller
             if (!$inserted) {
                 throw new RuntimeException('The loan repayment ledger entry could not be saved.');
             }
+            cooperativeRecordLoanInterestDistribution(
+                $this->db,
+                (int) $inserted,
+                $allocation['interest_paid']
+            );
 
             $new_balance = $balance - $allocation['principal_paid'] - $allocation['interest_paid'];
             $updatedSchedulesById = [];
@@ -1211,6 +1227,11 @@ class ApiLoans extends Controller
 
     private function require_finance_schema()
     {
+        $tables = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name IN ('cooperative_loan_interest_distributions', 'cooperative_loan_interest_returns')"
+        )->fetchColumn();
         $columns = $this->db->raw(
             "SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = DATABASE() AND (
@@ -1227,13 +1248,19 @@ class ApiLoans extends Controller
                      'principal_paid', 'interest_paid', 'overdue_interest_accrued',
                      'overdue_interest_paid', 'overdue_interest_remainder_units',
                      'overdue_interest_calculated_at'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_distributions' AND column_name IN (
+                     'loan_payment_id', 'interest_amount', 'eligible_investor_count', 'status'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_returns' AND column_name IN (
+                     'distribution_id', 'member_id', 'amount', 'claim_status', 'claimed_at', 'claim_reference'
                  ))
              )"
         )->fetchColumn();
-        if ((int) $columns !== 16) {
-            error_log('CoopWise cooperative finance schema is missing; apply the cooperative-finance and loan-overdue-interest upgrades.');
+        if ((int) $tables !== 2 || (int) $columns !== 26) {
+            error_log('CoopWise cooperative finance schema is missing; apply the cooperative-finance, loan-overdue-interest, and loan-interest returns upgrades.');
             $this->api->respond_error(
-                'Loan eligibility and capital tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql and database/coopwise_loan_overdue_interest_upgrade.sql in Navicat.',
+                'Loan eligibility and capital tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql, database/coopwise_loan_overdue_interest_upgrade.sql, and database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
                 503
             );
         }

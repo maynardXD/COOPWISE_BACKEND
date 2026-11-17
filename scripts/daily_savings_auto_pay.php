@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/lib/financial_workflows.php';
 require_once __DIR__ . '/lib/payment_reminders.php';
+require_once __DIR__ . '/lib/cooperative_finance.php';
 
 date_default_timezone_set('Asia/Manila');
 
@@ -51,6 +52,27 @@ $processed = [
     'payment_reminder_invalid_emails' => 0
 ];
 try {
+    $interestSchemaCount = (int) $db->query(
+        "SELECT COUNT(*) FROM information_schema.tables
+         WHERE table_schema = DATABASE()
+           AND table_name IN ('cooperative_loan_interest_distributions', 'cooperative_loan_interest_returns')"
+    )->fetchColumn();
+    $interestColumnCount = (int) $db->query(
+        "SELECT COUNT(*) FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND (
+             (table_name = 'cooperative_loan_interest_distributions' AND column_name IN (
+                 'loan_payment_id', 'interest_amount', 'eligible_investor_count', 'status'
+             )) OR
+             (table_name = 'cooperative_loan_interest_returns' AND column_name IN (
+                 'distribution_id', 'member_id', 'amount', 'claim_status', 'claimed_at', 'claim_reference'
+             ))
+         )"
+    )->fetchColumn();
+    if ($interestSchemaCount !== 2 || $interestColumnCount !== 10) {
+        throw new RuntimeException(
+            'Loan-interest returns are not configured. Apply database/coopwise_loan_interest_returns_upgrade.sql.'
+        );
+    }
     $members = $db->query(
         "SELECT id, loan_autopay_enabled, paluwagan_autopay_enabled
          FROM members
@@ -203,6 +225,11 @@ foreach ($members as $member) {
                     'savings',
                     $reference
                 ]);
+                cooperativeRecordLoanInterestDistribution(
+                    $db,
+                    (int) $db->lastInsertId(),
+                    $allocation['interest_paid']
+                );
 
                 $db->prepare(
                     'UPDATE loan_schedules

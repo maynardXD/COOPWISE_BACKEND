@@ -726,6 +726,8 @@ class ApiShareCapital extends Controller
         $required_tables = [
             'activity_logs',
             'cooperative_policies',
+            'cooperative_loan_interest_distributions',
+            'cooperative_loan_interest_returns',
             'loan_payments',
             'loan_schedules',
             'loans',
@@ -739,9 +741,21 @@ class ApiShareCapital extends Controller
             $required_tables
         )->fetchColumn();
         if ((int) $found !== count($required_tables)) {
-            error_log('CoopWise share-capital transfer schema is incomplete.');
+            error_log('CoopWise share-capital transfer schema is incomplete; apply database/coopwise_loan_interest_returns_upgrade.sql.');
             $this->api->respond_error(
-                'Share-capital transfers are not fully configured in the database.',
+                'Share-capital transfers are not fully configured in the database. Back up the database, then run database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
+                503
+            );
+        }
+        $distribution_columns = $this->db->raw(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = 'cooperative_loan_interest_distributions'
+               AND column_name IN ('interest_amount', 'status')"
+        )->fetchColumn();
+        if ((int) $distribution_columns !== 2) {
+            $this->api->respond_error(
+                'Share-capital transfers are not fully configured. Back up the database, then run database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
                 503
             );
         }

@@ -90,6 +90,103 @@ class WorkflowTestDatabase
     }
 }
 
+class LoanInterestTestStatement
+{
+    private $rows;
+
+    public function __construct(array $rows)
+    {
+        $this->rows = $rows;
+    }
+
+    public function fetch($mode = null)
+    {
+        return $this->rows ? $this->rows[0] : false;
+    }
+
+    public function fetchAll($mode = null)
+    {
+        if ($mode === PDO::FETCH_COLUMN) {
+            return array_map(static function (array $row) {
+                return reset($row);
+            }, $this->rows);
+        }
+        return $this->rows;
+    }
+}
+
+class LoanInterestTestTable
+{
+    private $database;
+    private $name;
+
+    public function __construct(LoanInterestTestDatabase $database, string $name)
+    {
+        $this->database = $database;
+        $this->name = $name;
+    }
+
+    public function insert(array $row)
+    {
+        return $this->database->insert($this->name, $row);
+    }
+}
+
+class LoanInterestTestDatabase
+{
+    public $activeMemberIds = [1, 2];
+    public $paidUpMemberIds = [1, 2];
+    public $distributions = [];
+    public $returns = [];
+
+    public function raw(string $sql, array $params = [])
+    {
+        if (strpos($sql, 'SELECT id, interest_amount FROM cooperative_loan_interest_distributions') !== false) {
+            foreach ($this->distributions as $id => $distribution) {
+                if ($distribution['loan_payment_id'] === $params[0]) {
+                    return new LoanInterestTestStatement([[
+                        'id' => $id,
+                        'interest_amount' => $distribution['interest_amount']
+                    ]]);
+                }
+            }
+            return new LoanInterestTestStatement([]);
+        }
+        if (strpos($sql, 'SELECT id FROM members') !== false) {
+            return new LoanInterestTestStatement(array_map(static function (int $id): array {
+                return ['id' => $id];
+            }, $this->activeMemberIds));
+        }
+        if (strpos($sql, 'SELECT member_id,') !== false) {
+            $eligible = array_values(array_intersect($this->activeMemberIds, $this->paidUpMemberIds));
+            return new LoanInterestTestStatement(array_map(static function (int $id): array {
+                return ['member_id' => $id, 'paid_up_amount' => '1.00'];
+            }, $eligible));
+        }
+        throw new RuntimeException('Unexpected loan-interest test query: ' . $sql);
+    }
+
+    public function table(string $name)
+    {
+        return new LoanInterestTestTable($this, $name);
+    }
+
+    public function insert(string $table, array $row): int
+    {
+        if ($table === 'cooperative_loan_interest_distributions') {
+            $id = count($this->distributions) + 1;
+            $this->distributions[$id] = $row;
+            return $id;
+        }
+        if ($table === 'cooperative_loan_interest_returns') {
+            $id = count($this->returns) + 1;
+            $this->returns[$id] = $row;
+            return $id;
+        }
+        throw new RuntimeException('Unexpected loan-interest test table: ' . $table);
+    }
+}
+
 $controller = (new ReflectionClass(ApiCheckout::class))->newInstanceWithoutConstructor();
 $database = new WorkflowTestDatabase();
 $databaseProperty = new ReflectionProperty(ApiCheckout::class, 'db');
@@ -161,7 +258,46 @@ assertSameValue(300000, $eligibility['max_eligible_amount_cents'], 'The eligible
 assertSameValue(0, cooperativeLoanCapitalCapacity(5000, 0, 5000), 'A fully lent share-capital balance should have no remaining loan capacity');
 assertSameValue(2000, cooperativeLoanCapitalCapacity(5000, 0, 3000), 'Principal repayments should restore available loan capacity');
 assertSameValue(6000, cooperativeLoanCapitalCapacity(5000, 1000, 0), 'Collected loan interest should increase cooperative loan capacity');
+assertSameValue(
+    10000,
+    cooperativeLoanCapitalCapacity(10000, 690, 0, 0, 690),
+    'Interest already allocated to investors should not remain in lending capacity'
+);
+assertSameValue(
+    10690,
+    cooperativeLoanCapitalCapacity(10000, 690, 0),
+    'Unallocated historical interest should remain in lending capacity'
+);
+$invalidLoanCapital = false;
+try {
+    cooperativeLoanCapitalCapacity(10000, 100, 0, 0, 101);
+} catch (InvalidArgumentException $error) {
+    $invalidLoanCapital = true;
+}
+assertSameValue(true, $invalidLoanCapital, 'Distributed interest above collected interest should be rejected');
 assertSameValue(0, cooperativeLoanCapitalCapacity(5000, 0, 0, 5000), 'Pending applications should reserve available loan capacity');
+$equalInterest = cooperativeEqualInterestAllocations(1000, [2, 1], 0);
+assertSameValue([1 => 500, 2 => 500], $equalInterest, 'Two active investors should receive equal loan-interest returns');
+$fourInvestorInterest = cooperativeEqualInterestAllocations(1000, [4, 3, 2, 1], 0);
+assertSameValue([1 => 250, 2 => 250, 3 => 250, 4 => 250], $fourInvestorInterest, 'Four active investors should receive equal loan-interest returns');
+$remainderInterest = cooperativeEqualInterestAllocations(10, [1, 2, 3], 2);
+assertSameValue(10, array_sum($remainderInterest), 'Equal interest allocation should distribute every cent');
+assertSameValue([1 => 3, 2 => 3, 3 => 4], $remainderInterest, 'Remainder cents should rotate deterministically across investors');
+assertSameValue([], cooperativeEqualInterestAllocations(100, [], 0), 'Interest with no eligible investor should remain undistributed');
+$loanInterestDatabase = new LoanInterestTestDatabase();
+$distributionId = cooperativeRecordLoanInterestDistribution($loanInterestDatabase, 17, 1000);
+assertSameValue(1, $distributionId, 'A collected-interest repayment should create one distribution record');
+assertSameValue('allocated', $loanInterestDatabase->distributions[1]['status'], 'Eligible investors should receive an allocated distribution');
+assertSameValue(2, count($loanInterestDatabase->returns), 'Each eligible investor should receive one ledger row');
+assertSameValue(['5.00', '5.00'], array_column($loanInterestDatabase->returns, 'amount'), 'Two investors should receive equal recorded returns');
+cooperativeRecordLoanInterestDistribution($loanInterestDatabase, 17, 1000);
+assertSameValue(1, count($loanInterestDatabase->distributions), 'Retrying a loan-payment allocation must not create another distribution');
+assertSameValue(2, count($loanInterestDatabase->returns), 'Retrying a loan-payment allocation must not duplicate investor returns');
+$noInvestorDatabase = new LoanInterestTestDatabase();
+$noInvestorDatabase->activeMemberIds = [];
+$retainedDistributionId = cooperativeRecordLoanInterestDistribution($noInvestorDatabase, 18, 100);
+assertSameValue('retained', $noInvestorDatabase->distributions[$retainedDistributionId]['status'], 'Interest with no active investor should remain cooperative income');
+assertSameValue(0, count($noInvestorDatabase->returns), 'A retained distribution should not create investor claims');
 assertSameValue(7500, cooperativeAvailableRepayment(10000, 2500), 'A pending checkout should reserve part of the loan balance');
 assertSameValue(0, cooperativeAvailableRepayment(10000, 12000), 'Reserved payments should not make available repayment negative');
 $simulatedMembershipDays = new ReflectionFunction('cooperativeSimulatedMembershipDays');

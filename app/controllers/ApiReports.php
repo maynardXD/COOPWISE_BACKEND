@@ -108,6 +108,10 @@ class ApiReports extends Controller
                 'loan_balance' => number_format((float) $loan_balance, 2, '.', ''),
                 'loan_principal_receivable' => number_format((float) ($loan_principal_receivable['total'] ?? 0), 2, '.', ''),
                 'available_loan_capital' => self::format_cents($loan_capital['available']),
+                'lendable_loan_interest' => self::format_cents($loan_capital['lendable_interest']),
+                'distributed_loan_interest' => self::format_cents($loan_capital['distributed_interest']),
+                'outstanding_loan_principal' => self::format_cents($loan_capital['outstanding_principal']),
+                'pending_loan_principal' => self::format_cents($loan_capital['pending_principal']),
                 'loan_payments_received' => number_format((float) $loan_payments, 2, '.', ''),
                 'loan_interest_received' => number_format((float) $loan_interest_received, 2, '.', ''),
                 'approved_member_returns' => number_format((float) ($approved_member_returns['total'] ?? 0), 2, '.', '')
@@ -217,7 +221,8 @@ class ApiReports extends Controller
         $tables = $this->db->raw(
             "SELECT COUNT(*) FROM information_schema.tables
              WHERE table_schema = DATABASE() AND table_name IN (
-                 'cooperative_surplus_distributions', 'cooperative_member_returns'
+                 'cooperative_surplus_distributions', 'cooperative_member_returns',
+                 'cooperative_loan_interest_distributions', 'cooperative_loan_interest_returns'
              )"
         )->fetchColumn();
         $columns = $this->db->raw(
@@ -232,13 +237,19 @@ class ApiReports extends Controller
                  (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid')) OR
                  (table_name = 'cooperative_member_returns' AND column_name IN (
                      'claim_status', 'claimed_at', 'claim_reference'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_distributions' AND column_name IN (
+                     'loan_payment_id', 'interest_amount', 'eligible_investor_count', 'status'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_returns' AND column_name IN (
+                     'distribution_id', 'member_id', 'amount', 'claim_status', 'claimed_at', 'claim_reference'
                  ))
              )"
         )->fetchColumn();
-        if ((int) $tables !== 2 || (int) $columns !== 13) {
-            error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
+        if ((int) $tables !== 4 || (int) $columns !== 23) {
+            error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql, database/coopwise_member_return_claims_upgrade.sql, and database/coopwise_loan_interest_returns_upgrade.sql.');
             $this->api->respond_error(
-                'Cooperative finance reports are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
+                'Cooperative finance reports are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql, database/coopwise_member_return_claims_upgrade.sql, and database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
                 503
             );
         }

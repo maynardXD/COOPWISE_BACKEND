@@ -25,9 +25,35 @@ class ApiCooperativeFinance extends Controller
         $policy = $this->db->raw(
             'SELECT cooperative_registration_date FROM cooperative_policies WHERE id = 1'
         )->fetch(PDO::FETCH_ASSOC);
+        $loan_capital = cooperativeAvailableLoanCapital($this->db);
+        $loan_interest_summary = $this->db->raw(
+            "SELECT
+                COALESCE(SUM(CASE WHEN d.status = 'allocated' THEN d.interest_amount ELSE 0 END), 0) AS allocated_interest,
+                COALESCE(SUM(CASE WHEN d.status = 'retained' THEN d.interest_amount ELSE 0 END), 0) AS retained_interest,
+                COUNT(CASE WHEN d.status = 'allocated' THEN 1 END) AS allocated_payment_count,
+                COALESCE((
+                    SELECT SUM(r.amount) FROM cooperative_loan_interest_returns r
+                    WHERE r.claim_status = 'available'
+                ), 0) AS available_returns
+             FROM cooperative_loan_interest_distributions d"
+        )->fetch(PDO::FETCH_ASSOC);
 
         $result = [
-            'available_loan_capital' => self::format_cents(cooperativeAvailableLoanCapital($this->db)['available']),
+            'available_loan_capital' => self::format_cents($loan_capital['available']),
+            'loan_capital_breakdown' => [
+                'paid_up_share_capital' => self::format_cents($loan_capital['paid_up_share_capital']),
+                'collected_interest' => self::format_cents($loan_capital['collected_interest']),
+                'distributed_interest' => self::format_cents($loan_capital['distributed_interest']),
+                'lendable_interest' => self::format_cents($loan_capital['lendable_interest']),
+                'outstanding_principal' => self::format_cents($loan_capital['outstanding_principal']),
+                'pending_principal' => self::format_cents($loan_capital['pending_principal'])
+            ],
+            'loan_interest_summary' => [
+                'allocated_interest' => self::format_cents(self::money_to_cents((string) ($loan_interest_summary['allocated_interest'] ?? '0.00'))),
+                'retained_interest' => self::format_cents(self::money_to_cents((string) ($loan_interest_summary['retained_interest'] ?? '0.00'))),
+                'available_returns' => self::format_cents(self::money_to_cents((string) ($loan_interest_summary['available_returns'] ?? '0.00'))),
+                'allocated_payment_count' => (int) ($loan_interest_summary['allocated_payment_count'] ?? 0)
+            ],
             'cooperative_registration_date' => $policy['cooperative_registration_date'] ?? null
         ];
         $result['approved_member_returns'] = self::format_cents(self::money_to_cents((string) ($this->db->raw(
@@ -43,6 +69,19 @@ class ApiCooperativeFinance extends Controller
                  INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
                  WHERE d.status = 'approved' AND r.claim_status = 'available'"
             )->fetch(PDO::FETCH_ASSOC)['total'] ?? '0.00')));
+            $result['loan_interest_allocations'] = $this->db->raw(
+                 "SELECT r.id, r.amount, r.claim_status, r.claimed_at, r.created_at,
+                         d.interest_amount, d.eligible_investor_count, lp.payment_date,
+                         l.loan_code, m.member_number, m.first_name, m.last_name
+                  FROM cooperative_loan_interest_returns r
+                  INNER JOIN cooperative_loan_interest_distributions d ON d.id = r.distribution_id
+                  INNER JOIN loan_payments lp ON lp.id = d.loan_payment_id
+                  INNER JOIN loans l ON l.id = lp.loan_id
+                  INNER JOIN members m ON m.id = r.member_id
+                  WHERE d.status = 'allocated'
+                  ORDER BY r.created_at DESC, r.id DESC
+                  LIMIT 100"
+            )->fetchAll(PDO::FETCH_ASSOC);
         }
 
         $member = null;
@@ -79,6 +118,21 @@ class ApiCooperativeFinance extends Controller
                  ORDER BY d.fiscal_year DESC, r.id DESC",
                 [(int) $member['id']]
             )->fetchAll(PDO::FETCH_ASSOC);
+            $result['loan_interest_returns'] = $this->db->raw(
+                "SELECT r.id, r.distribution_id, r.amount, r.claim_status, r.claimed_at, r.created_at,
+                        d.interest_amount, d.eligible_investor_count, lp.payment_date,
+                        l.loan_code, lp.reference_no
+                 FROM cooperative_loan_interest_returns r
+                 INNER JOIN cooperative_loan_interest_distributions d ON d.id = r.distribution_id
+                 INNER JOIN loan_payments lp ON lp.id = d.loan_payment_id
+                 INNER JOIN loans l ON l.id = lp.loan_id
+                 WHERE r.member_id = ? AND d.status = 'allocated'
+                 ORDER BY r.created_at DESC, r.id DESC",
+                [(int) $member['id']]
+            )->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $result['member_returns'] = [];
+            $result['loan_interest_returns'] = [];
         }
         $this->api->respond($result);
     }
@@ -92,26 +146,44 @@ class ApiCooperativeFinance extends Controller
         }
         $this->require_finance_schema();
         $member = $this->member_profile($user);
-        $destination = $this->api->body()['destination'] ?? '';
+        $body = $this->api->body();
+        $destination = $body['destination'] ?? '';
+        $source = $body['source'] ?? 'surplus';
         if (!in_array($destination, ['savings', 'share_capital'], true)) {
             $this->api->respond_error('Choose savings or share capital for your approved member returns.', 422);
+        }
+        if (!in_array($source, ['surplus', 'loan_interest'], true)) {
+            $this->api->respond_error('Choose a supported member-return source.', 422);
         }
 
         $this->db->transaction();
         try {
             $this->db->raw('SELECT id FROM cooperative_policies WHERE id = 1 FOR UPDATE')->fetch();
             $this->db->raw('SELECT id FROM members WHERE id = ? FOR UPDATE', [(int) $member['id']])->fetch();
-            $returns = $this->db->raw(
-                "SELECT r.id, r.total_return
-                 FROM cooperative_member_returns r
-                 INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
-                 WHERE r.member_id = ? AND d.status = 'approved' AND r.claim_status = 'available'
-                 ORDER BY d.fiscal_year ASC, r.id ASC
-                 FOR UPDATE",
-                [(int) $member['id']]
-            )->fetchAll(PDO::FETCH_ASSOC);
+            $returns = $source === 'loan_interest'
+                ? $this->db->raw(
+                    "SELECT r.id, r.amount AS total_return
+                     FROM cooperative_loan_interest_returns r
+                     INNER JOIN cooperative_loan_interest_distributions d ON d.id = r.distribution_id
+                     WHERE r.member_id = ? AND d.status = 'allocated'
+                       AND r.claim_status = 'available' AND r.amount > 0
+                     ORDER BY r.created_at ASC, r.id ASC
+                     FOR UPDATE",
+                    [(int) $member['id']]
+                )->fetchAll(PDO::FETCH_ASSOC)
+                : $this->db->raw(
+                    "SELECT r.id, r.total_return
+                     FROM cooperative_member_returns r
+                     INNER JOIN cooperative_surplus_distributions d ON d.id = r.distribution_id
+                     WHERE r.member_id = ? AND d.status = 'approved' AND r.claim_status = 'available'
+                     ORDER BY d.fiscal_year ASC, r.id ASC
+                     FOR UPDATE",
+                    [(int) $member['id']]
+                )->fetchAll(PDO::FETCH_ASSOC);
             if (!$returns) {
-                throw new DomainException('There are no approved member returns available to transfer.');
+                throw new DomainException($source === 'loan_interest'
+                    ? 'There are no available loan-interest returns to transfer.'
+                    : 'There are no approved member returns available to transfer.');
             }
             $amount = 0;
             $return_ids = [];
@@ -133,7 +205,9 @@ class ApiCooperativeFinance extends Controller
                     'amount' => self::format_cents($amount),
                     'balance_after' => self::format_cents($balance_after),
                     'reference_no' => $reference,
-                    'description' => 'Approved cooperative dividend/member return credited to savings.',
+                    'description' => $source === 'loan_interest'
+                        ? 'Equal loan-interest member return credited to savings.'
+                        : 'Approved cooperative dividend/member return credited to savings.',
                     'created_by_user_id' => (int) $user['id']
                 ]);
                 if (!$inserted) {
@@ -177,7 +251,9 @@ class ApiCooperativeFinance extends Controller
                     'balance_after' => self::format_cents($amount),
                     'transaction_reference' => $reference,
                     'payment_method' => 'simulation',
-                    'description' => 'Approved cooperative dividend/member return reinvested as share capital.',
+                    'description' => $source === 'loan_interest'
+                        ? 'Equal loan-interest member return reinvested as share capital.'
+                        : 'Approved cooperative dividend/member return reinvested as share capital.',
                     'created_by_user_id' => (int) $user['id']
                 ]);
                 if (!$inserted) {
@@ -185,7 +261,10 @@ class ApiCooperativeFinance extends Controller
                 }
             }
             foreach ($return_ids as $return_id) {
-                $updated = $this->db->table('cooperative_member_returns')
+                $return_table = $source === 'loan_interest'
+                    ? 'cooperative_loan_interest_returns'
+                    : 'cooperative_member_returns';
+                $updated = $this->db->table($return_table)
                     ->where('id', $return_id)
                     ->where('claim_status', 'available')
                     ->update([
@@ -197,10 +276,13 @@ class ApiCooperativeFinance extends Controller
                     throw new DomainException('A member return was already transferred. Refresh the page and check your balance.');
                 }
             }
-            $this->write_activity_log((int) $user['id'], 'cooperative_finance', 'member_returns_claimed', [
+            $this->write_activity_log((int) $user['id'], 'cooperative_finance', $source === 'loan_interest'
+                ? 'loan_interest_returns_claimed'
+                : 'member_returns_claimed', [
                 'destination' => $destination,
                 'amount' => self::format_cents($amount),
                 'return_ids' => $return_ids,
+                'source' => $source,
                 'reference_no' => $reference
             ]);
             $this->db->commit();
@@ -213,8 +295,12 @@ class ApiCooperativeFinance extends Controller
         }
         $this->api->respond([
             'message' => $destination === 'savings'
-                ? 'Approved member returns were added to your savings.'
-                : 'Approved member returns were reinvested as share capital.',
+                ? ($source === 'loan_interest'
+                    ? 'Loan-interest returns were added to your savings.'
+                    : 'Approved member returns were added to your savings.')
+                : ($source === 'loan_interest'
+                    ? 'Loan-interest returns were reinvested as share capital.'
+                    : 'Approved member returns were reinvested as share capital.'),
             'amount' => self::format_cents($amount)
         ]);
     }
@@ -549,7 +635,9 @@ class ApiCooperativeFinance extends Controller
     {
         $required_tables = [
             'cooperative_surplus_distributions',
-            'cooperative_member_returns'
+            'cooperative_member_returns',
+            'cooperative_loan_interest_distributions',
+            'cooperative_loan_interest_returns'
         ];
         $placeholders = implode(',', array_fill(0, count($required_tables), '?'));
         $found = $this->db->raw(
@@ -569,13 +657,19 @@ class ApiCooperativeFinance extends Controller
                  (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid')) OR
                  (table_name = 'cooperative_member_returns' AND column_name IN (
                      'claim_status', 'claimed_at', 'claim_reference'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_distributions' AND column_name IN (
+                     'loan_payment_id', 'interest_amount', 'eligible_investor_count', 'status'
+                 )) OR
+                 (table_name = 'cooperative_loan_interest_returns' AND column_name IN (
+                     'distribution_id', 'member_id', 'amount', 'claim_status', 'claimed_at', 'claim_reference'
                  ))
              )"
         )->fetchColumn();
-        if ((int) $found !== count($required_tables) || (int) $columns !== 13) {
-            error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
+        if ((int) $found !== count($required_tables) || (int) $columns !== 23) {
+            error_log('CoopWise cooperative finance schema is missing; apply the finance, member-return claims, and loan-interest returns upgrades.');
             $this->api->respond_error(
-                'Cooperative finance features are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
+                'Cooperative finance features are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql, database/coopwise_member_return_claims_upgrade.sql, and database/coopwise_loan_interest_returns_upgrade.sql in Navicat.',
                 503
             );
         }
