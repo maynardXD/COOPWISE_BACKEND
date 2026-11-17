@@ -22,13 +22,13 @@ class User_model extends Model
     public function find_for_login($login)
     {
         $user = $this->db->table('users u')
-            ->select('u.id, u.email, u.password, u.full_name, u.role, u.status')
+            ->select('u.id, u.email, u.password, u.full_name, u.role, u.status, u.terms_required, u.terms_accepted_at')
             ->where('u.email', strtolower(trim((string) $login)))
             ->get();
 
         if (!$user && preg_match('/^09\d{9}$/', (string) $login)) {
             $user = $this->db->table('users u')
-                ->select('u.id, u.email, u.password, u.full_name, u.role, u.status')
+                ->select('u.id, u.email, u.password, u.full_name, u.role, u.status, u.terms_required, u.terms_accepted_at')
                 ->inner_join('members m', 'm.user_id = u.id')
                 ->where('m.contact_number', $login)
                 ->get();
@@ -40,7 +40,7 @@ class User_model extends Model
     public function find_identity($id)
     {
         return $this->db->table($this->table)
-            ->select('id, email, full_name, role, status')
+            ->select('id, email, full_name, role, status, terms_required, terms_accepted_at, terms_version')
             ->where('id', (int) $id)
             ->get();
     }

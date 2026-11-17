@@ -50,6 +50,9 @@ class ApiHealth extends Controller
                 $this->api->respond_error('The service is not ready because its database schema is incomplete.', 503);
             }
             $required_columns = [
+                ['users', 'terms_required'],
+                ['users', 'terms_accepted_at'],
+                ['users', 'terms_version'],
                 ['cooperative_policies', 'minimum_membership_days'],
                 ['cooperative_policies', 'minimum_paid_up_share_capital'],
                 ['cooperative_policies', 'minimum_savings_balance'],

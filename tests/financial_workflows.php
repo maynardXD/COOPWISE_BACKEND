@@ -121,6 +121,40 @@ assertSameValue('xendit', $paymentMethodParser->invoke(null, 'CW-PAY-test'), 'Pr
 assertSameValue(3000, autoPayLoanAmount(3000, 10000, 12000), 'Auto-pay should apply available savings as a partial installment');
 assertSameValue(8000, autoPayLoanAmount(12000, 8000, 10000), 'Auto-pay should not collect more than the remaining installment');
 assertSameValue(0, autoPayLoanAmount(0, 8000, 10000), 'Auto-pay should skip an installment when savings are empty');
+$overdueSchedule = [
+    'due_date' => '2026-01-01',
+    'principal_due' => '1000.00',
+    'principal_paid' => '0.00',
+    'overdue_interest_accrued' => '0.00',
+    'overdue_interest_paid' => '0.00',
+    'overdue_interest_remainder_units' => 0,
+    'overdue_interest_calculated_at' => null
+];
+$dueDateAccrual = cooperativeAccrueLoanScheduleOverdueInterest($overdueSchedule, 600, '2026-01-01');
+assertSameValue('0.00', $dueDateAccrual['overdue_interest_accrued'], 'Overdue interest should not accrue on the installment due date');
+$dailyAccrual = cooperativeAccrueLoanScheduleOverdueInterest($overdueSchedule, 600, '2026-01-02');
+assertSameValue('0.16', $dailyAccrual['overdue_interest_accrued'], 'Overdue interest should accrue at 6% per year on the unpaid principal');
+$overdueSchedule = array_merge($overdueSchedule, $dailyAccrual);
+$secondDailyAccrual = cooperativeAccrueLoanScheduleOverdueInterest($overdueSchedule, 600, '2026-01-03');
+assertSameValue('0.33', $secondDailyAccrual['overdue_interest_accrued'], 'Sub-cent daily interest should carry forward without rounding drift');
+$overdueSchedule = array_merge($overdueSchedule, $secondDailyAccrual);
+$thirdDailyAccrual = cooperativeAccrueLoanScheduleOverdueInterest($overdueSchedule, 600, '2026-01-04');
+assertSameValue('0.49', $thirdDailyAccrual['overdue_interest_accrued'], 'Repeated daily accrual should match cumulative simple interest');
+$partialAccrualSchedule = array_merge($overdueSchedule, $thirdDailyAccrual, ['principal_paid' => '500.00']);
+$afterPartialPrincipalPayment = cooperativeAccrueLoanScheduleOverdueInterest($partialAccrualSchedule, 600, '2026-01-05');
+assertSameValue('0.58', $afterPartialPrincipalPayment['overdue_interest_accrued'], 'Future overdue interest should use only the remaining installment principal');
+$zeroRateAccrual = cooperativeAccrueLoanScheduleOverdueInterest($overdueSchedule, 0, '2026-01-05');
+assertSameValue('0.33', $zeroRateAccrual['overdue_interest_accrued'], 'A zero overdue rate should not add interest');
+$cappedAccrual = cooperativeAccrueLoanScheduleOverdueInterest([
+    'due_date' => '2024-01-01',
+    'principal_due' => '100.00',
+    'principal_paid' => '0.00',
+    'overdue_interest_accrued' => '99.99',
+    'overdue_interest_paid' => '0.00',
+    'overdue_interest_remainder_units' => 0,
+    'overdue_interest_calculated_at' => '2026-01-01'
+], 600, '2026-01-02');
+assertSameValue('100.00', $cappedAccrual['overdue_interest_accrued'], 'Overdue interest should not exceed the installment principal');
 $eligibility = cooperativeLoanEligibility(500000, 0, 50000, 45, false, true, 500000, 0, 30, 1.0, 300000);
 assertSameValue(true, $eligibility['eligible'], 'A qualified member should be able to apply within the product cap');
 assertSameValue(300000, $eligibility['max_eligible_amount_cents'], 'The eligible amount should respect the product cap and existing exposure');
@@ -173,6 +207,41 @@ $repayment = allocateLoanRepayment(2000, [
 assertSameValue(1300, $repayment['principal_paid'], 'Repayments should restore principal after interest is covered');
 assertSameValue(700, $repayment['interest_paid'], 'Repayments should track interest separately from principal');
 assertSameValue('3.00', $repayment['schedules'][1]['principal_paid'], 'Partial repayment should be applied to the next schedule in order');
+$lateRepayment = allocateLoanRepayment(600, [[
+    'id' => 3,
+    'interest_due' => '5.00',
+    'principal_due' => '10.00',
+    'interest_paid' => '0.00',
+    'principal_paid' => '0.00',
+    'overdue_interest_accrued' => '1.00',
+    'overdue_interest_paid' => '0.00',
+    'overdue_interest_remainder_units' => 0,
+    'total_due' => '15.00',
+    'paid_amount' => '0.00',
+    'status' => 'overdue'
+]]);
+assertSameValue(100, $lateRepayment['overdue_interest_paid'], 'Repayments should cover overdue interest before regular installment amounts');
+assertSameValue(500, $lateRepayment['interest_paid'], 'Partial repayments should then cover scheduled interest');
+assertSameValue('5.00', $lateRepayment['schedules'][0]['paid_amount'], 'Overdue interest should not be included in the contractual installment paid amount');
+$lateOverpaymentRejected = false;
+try {
+    allocateLoanRepayment(1601, [[
+        'id' => 4,
+        'interest_due' => '5.00',
+        'principal_due' => '10.00',
+        'interest_paid' => '0.00',
+        'principal_paid' => '0.00',
+        'overdue_interest_accrued' => '1.00',
+        'overdue_interest_paid' => '0.00',
+        'overdue_interest_remainder_units' => 0,
+        'total_due' => '15.00',
+        'paid_amount' => '0.00',
+        'status' => 'overdue'
+    ]]);
+} catch (InvalidArgumentException $error) {
+    $lateOverpaymentRejected = true;
+}
+assertSameValue(true, $lateOverpaymentRejected, 'Repayments should reject amounts above all scheduled and overdue-interest balances');
 
 $api = (new ReflectionClass(Api::class))->newInstanceWithoutConstructor();
 $previousQuery = $_GET;

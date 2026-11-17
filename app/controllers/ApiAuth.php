@@ -11,6 +11,7 @@ class ApiAuth extends Controller
         parent::__construct();
         $this->api = $this->call->library('api');
         $this->db = $this->call->database();
+        $this->call->library('coopwise_access');
         $this->call->model('User_model');
     }
 
@@ -80,7 +81,7 @@ class ApiAuth extends Controller
 
         $email = strtolower(trim((string) $claims['email']));
         $user = $this->db->table('users u')
-            ->select('u.id, u.email, u.full_name, u.role, u.status')
+            ->select('u.id, u.email, u.full_name, u.role, u.status, u.terms_required, u.terms_accepted_at')
             ->inner_join('members m', 'm.user_id = u.id')
             ->where('u.email', $email)
             ->where('u.role', 'member')
@@ -131,6 +132,34 @@ class ApiAuth extends Controller
             $this->api->revoke_refresh_token($refresh_token);
         }
         $this->api->respond(['message' => 'Signed out.']);
+    }
+
+    public function accept_terms()
+    {
+        $this->api->require_method('POST');
+        $claims = $this->api->require_jwt();
+        $user = $this->User_model->find_identity((int) $claims['sub']);
+        if (!$user || $user['status'] !== 'active') {
+            $this->api->respond_error('Account is unavailable.', 401);
+        }
+        $data = $this->api->body();
+        if (($data['terms_version'] ?? null) !== '2026-11-17') {
+            $this->api->respond_error('These terms have changed. Reload the page and review the current version.', 409);
+        }
+        if ((int) $user['terms_required'] === 1) {
+            $updated = $this->db->table('users')
+                ->where('id', (int) $user['id'])
+                ->where('terms_required', 1)
+                ->update([
+                    'terms_required' => 0,
+                    'terms_accepted_at' => date('Y-m-d H:i:s'),
+                    'terms_version' => '2026-11-17'
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Terms acceptance could not be recorded.');
+            }
+        }
+        $this->api->respond(['message' => 'Your acceptance has been recorded.']);
     }
 
     public function register()
@@ -370,17 +399,36 @@ class ApiAuth extends Controller
             'id' => (int) $user['id'],
             'role' => $user['role']
         ]);
+        $profile = [
+            'id' => (int) $user['id'],
+            'full_name' => $user['full_name'],
+            'role' => $user['role'],
+            'terms_required' => (bool) ($user['terms_required'] ?? false),
+            'terms_accepted_at' => $user['terms_accepted_at'] ?? null
+        ];
+        if ($user['role'] === 'member') {
+            $this->call->model('Member_model');
+            $member = $this->Member_model->find_for_user((int) $user['id']);
+            if ($member) {
+                $age = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
+                $profile['member'] = [
+                    'member_number' => $member['member_number'],
+                    'first_name' => $member['first_name'],
+                    'middle_name' => $member['middle_name'],
+                    'last_name' => $member['last_name'],
+                    'status' => $member['status'],
+                    'loan_age' => $age,
+                    'loan_age_eligible' => $age !== null && $age >= 20
+                ];
+            }
+        }
         $this->api->respond([
             'message' => $message,
             'access_token' => $tokens['access_token'],
             'refresh_token' => $tokens['refresh_token'],
             'token_type' => $tokens['token_type'],
             'expires_in' => $tokens['expires_in'],
-            'user' => [
-                'id' => (int) $user['id'],
-                'full_name' => $user['full_name'],
-                'role' => $user['role']
-            ]
+            'user' => $profile
         ]);
     }
 
@@ -716,18 +764,23 @@ class ApiAuth extends Controller
         $profile = [
             'id' => (int) $user['id'],
             'full_name' => $user['full_name'],
-            'role' => $user['role']
+            'role' => $user['role'],
+            'terms_required' => (bool) ($user['terms_required'] ?? false),
+            'terms_accepted_at' => $user['terms_accepted_at'] ?? null
         ];
         if ($user['role'] === 'member') {
             $this->call->model('Member_model');
             $member = $this->Member_model->find_for_user((int) $user['id']);
             if ($member) {
+                $loanAge = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
                 $profile['member'] = [
                     'member_number' => $member['member_number'],
                     'first_name' => $member['first_name'],
                     'middle_name' => $member['middle_name'],
                     'last_name' => $member['last_name'],
                     'status' => $member['status'],
+                    'loan_age' => $loanAge,
+                    'loan_age_eligible' => $loanAge !== null && $loanAge >= 20,
                     'is_investor' => (float) $this->db->raw(
                         "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'payment' THEN amount ELSE -amount END), 0) AS paid_up_amount
                          FROM share_capital_transactions WHERE member_id = ?",

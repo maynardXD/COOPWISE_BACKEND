@@ -21,6 +21,67 @@ function cooperativeAvailableRepayment(int $balance, int $reservedPayments): int
     return max(0, $balance - max(0, $reservedPayments));
 }
 
+function cooperativeAccrueLoanScheduleOverdueInterest(array $schedule, int $annualRateBasisPoints, string $today): array
+{
+    $denominator = 10000 * 365;
+    $timezone = new DateTimeZone('Asia/Manila');
+    $asOfDate = DateTimeImmutable::createFromFormat('!Y-m-d', $today, $timezone);
+    $dueDate = DateTimeImmutable::createFromFormat('!Y-m-d', (string) $schedule['due_date'], $timezone);
+    if (!$asOfDate || !$dueDate || $asOfDate->format('Y-m-d') !== $today
+        || $dueDate->format('Y-m-d') !== (string) $schedule['due_date']) {
+        throw new InvalidArgumentException('Loan dates must use the YYYY-MM-DD format.');
+    }
+
+    $principalDue = cooperativeMoneyToCents((string) $schedule['principal_due']);
+    $principalPaid = cooperativeMoneyToCents((string) ($schedule['principal_paid'] ?? '0.00'));
+    $accrued = cooperativeMoneyToCents((string) ($schedule['overdue_interest_accrued'] ?? '0.00'));
+    $paid = cooperativeMoneyToCents((string) ($schedule['overdue_interest_paid'] ?? '0.00'));
+    $remainderUnits = (int) ($schedule['overdue_interest_remainder_units'] ?? 0);
+    if (abs($remainderUnits) > intdiv($denominator, 2)) {
+        throw new InvalidArgumentException('The overdue-interest remainder is invalid.');
+    }
+    $lastCalculated = !empty($schedule['overdue_interest_calculated_at'])
+        ? DateTimeImmutable::createFromFormat('!Y-m-d', (string) $schedule['overdue_interest_calculated_at'], $timezone)
+        : $dueDate;
+    if (!$lastCalculated) {
+        throw new InvalidArgumentException('The overdue-interest calculation date is invalid.');
+    }
+
+    $newAccrued = $accrued;
+    $newRemainderUnits = $remainderUnits;
+    $calculatedAt = $schedule['overdue_interest_calculated_at'] ?? null;
+    if ($annualRateBasisPoints > 0 && $asOfDate > $dueDate && $principalDue > $principalPaid) {
+        if ($lastCalculated < $dueDate) {
+            $lastCalculated = $dueDate;
+        }
+        $days = $lastCalculated < $asOfDate ? (int) $lastCalculated->diff($asOfDate)->days : 0;
+        if ($days > 0) {
+            $unpaidPrincipal = $principalDue - $principalPaid;
+            $numerator = $unpaidPrincipal * $annualRateBasisPoints * $days + $remainderUnits;
+            $increment = intdiv($numerator + intdiv($denominator, 2), $denominator);
+            $newRemainderUnits = $numerator - ($increment * $denominator);
+            $newAccrued = min($principalDue, $accrued + $increment);
+            if ($newAccrued === $principalDue) {
+                $newRemainderUnits = 0;
+            }
+        }
+        $calculatedAt = $today;
+    } elseif ($annualRateBasisPoints > 0 && $principalDue <= $principalPaid) {
+        $newRemainderUnits = 0;
+    } elseif ($annualRateBasisPoints <= 0) {
+        $newRemainderUnits = 0;
+    }
+
+    return [
+        'overdue_interest_accrued' => cooperativeFormatCents($newAccrued),
+        'overdue_interest_paid' => cooperativeFormatCents($paid),
+        'overdue_interest_calculated_at' => $calculatedAt,
+        'overdue_interest_remainder_units' => $newRemainderUnits,
+        'overdue_interest_balance_cents' => max(0, $newAccrued - $paid),
+        'new_overdue_interest_cents' => $newAccrued - $accrued
+    ];
+}
+
 function cooperativeLoanCapitalCapacity(
     int $paidUpShareCapital,
     int $collectedInterest,
@@ -231,31 +292,52 @@ function allocateLoanRepayment(int $amount, array $schedules): array
     $remaining = $amount;
     $principalPaid = 0;
     $interestPaid = 0;
+    $overdueInterestPaid = 0;
     $updatedSchedules = [];
     foreach ($schedules as $schedule) {
         if ($remaining < 1) {
             break;
         }
+        $overdueInterestDue = cooperativeMoneyToCents((string) ($schedule['overdue_interest_accrued'] ?? '0.00'));
+        $overdueInterestPaidBefore = cooperativeMoneyToCents((string) ($schedule['overdue_interest_paid'] ?? '0.00'));
+        $remainderUnits = (int) ($schedule['overdue_interest_remainder_units'] ?? 0);
+        if (abs($remainderUnits) > intdiv(10000 * 365, 2)) {
+            throw new InvalidArgumentException('The overdue-interest remainder is invalid.');
+        }
         $interestDue = cooperativeMoneyToCents((string) $schedule['interest_due']);
         $principalDue = cooperativeMoneyToCents((string) $schedule['principal_due']);
         $paidInterestBefore = cooperativeMoneyToCents((string) ($schedule['interest_paid'] ?? '0.00'));
         $paidPrincipalBefore = cooperativeMoneyToCents((string) ($schedule['principal_paid'] ?? '0.00'));
+        $overdueInterestApplied = min($remaining, max(0, $overdueInterestDue - $overdueInterestPaidBefore));
+        $remaining -= $overdueInterestApplied;
         $interestApplied = min($remaining, max(0, $interestDue - $paidInterestBefore));
         $remaining -= $interestApplied;
         $principalApplied = min($remaining, max(0, $principalDue - $paidPrincipalBefore));
         $remaining -= $principalApplied;
         $principalPaid += $principalApplied;
         $interestPaid += $interestApplied;
+        $overdueInterestPaid += $overdueInterestApplied;
+        $paidOverdueInterest = $overdueInterestPaidBefore + $overdueInterestApplied;
         $paidInterest = $paidInterestBefore + $interestApplied;
         $paidPrincipal = $paidPrincipalBefore + $principalApplied;
+        if ($paidPrincipal >= $principalDue) {
+            $remainderUnits = 0;
+        }
+        $remainingBase = max(0, cooperativeMoneyToCents((string) $schedule['total_due']) - $paidInterest - $paidPrincipal);
+        $remainingOverdueInterest = max(0, $overdueInterestDue - $paidOverdueInterest);
         $updatedSchedules[] = [
             'id' => (int) $schedule['id'],
             'paid_amount' => cooperativeFormatCents($paidInterest + $paidPrincipal),
             'principal_paid' => cooperativeFormatCents($paidPrincipal),
             'interest_paid' => cooperativeFormatCents($paidInterest),
-            'status' => $paidInterest + $paidPrincipal >= cooperativeMoneyToCents((string) $schedule['total_due'])
+            'overdue_interest_paid' => cooperativeFormatCents($paidOverdueInterest),
+            'overdue_interest_accrued' => cooperativeFormatCents($overdueInterestDue),
+            'overdue_interest_remainder_units' => $remainderUnits,
+            'status' => $remainingBase === 0 && $remainingOverdueInterest === 0 && $remainderUnits === 0
                 ? 'paid'
-                : (string) $schedule['status']
+                : ($remainingOverdueInterest > 0 && $remainingBase === 0
+                    ? 'overdue'
+                    : (string) $schedule['status'])
         ];
     }
     if ($remaining !== 0) {
@@ -264,6 +346,7 @@ function allocateLoanRepayment(int $amount, array $schedules): array
     return [
         'principal_paid' => $principalPaid,
         'interest_paid' => $interestPaid,
+        'overdue_interest_paid' => $overdueInterestPaid,
         'schedules' => $updatedSchedules
     ];
 }

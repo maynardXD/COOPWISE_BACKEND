@@ -635,18 +635,37 @@ class ApiCheckout extends Controller
 
     private function reserve_loan_amount(int $loan_id, int $member_id, int $amount)
     {
-        $loan = $this->db->raw('SELECT id, member_id, status, current_balance FROM loans WHERE id = ? FOR UPDATE', [$loan_id])
+        $loan = $this->db->raw(
+            'SELECT id, member_id, status, current_balance, overdue_interest_rate
+             FROM loans WHERE id = ? FOR UPDATE',
+            [$loan_id]
+        )
             ->fetch(PDO::FETCH_ASSOC);
         if (!$loan || (int) $loan['member_id'] !== $member_id || !in_array($loan['status'], ['approved', 'active'], true)) {
             throw new DomainException('Choose one of your approved or active loans.');
         }
         $balance = self::money_to_cents((string) $loan['current_balance']);
+        $schedules = $this->db->table('loan_schedules')
+            ->where('loan_id', $loan_id)
+            ->in('status', ['pending', 'overdue'])
+            ->get_all();
+        $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+        $overdueInterest = 0;
+        foreach ($schedules as $schedule) {
+            $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                $schedule,
+                (int) round((float) $loan['overdue_interest_rate'] * 100),
+                $today
+            );
+            $overdueInterest += $accrual['overdue_interest_balance_cents'];
+        }
         $pending = $this->db->raw(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM payment_transactions
              WHERE loan_id = ? AND status IN ('pending', 'needs_review')",
             [$loan_id]
         )->fetch(PDO::FETCH_ASSOC);
-        if ($balance === false || $amount > $balance - self::money_to_cents((string) ($pending['total'] ?? '0.00'))) {
+        if ($balance === false
+            || $amount > $balance + $overdueInterest - self::money_to_cents((string) ($pending['total'] ?? '0.00'))) {
             throw new DomainException('This payment exceeds the loan balance that is still available for checkout.');
         }
     }
@@ -846,7 +865,7 @@ class ApiCheckout extends Controller
         $balance = $loan ? self::money_to_cents((string) $loan['current_balance']) : false;
         if (!$loan || (int) $loan['member_id'] !== (int) $payment['member_id']
             || !in_array($loan['status'], ['approved', 'active'], true)
-            || $balance === false || $amount > $balance) {
+            || $balance === false) {
             throw new DomainException('The paid loan repayment no longer matches an eligible loan balance.');
         }
 
@@ -855,6 +874,43 @@ class ApiCheckout extends Controller
             ->in('status', ['pending', 'overdue'])
             ->order_by('due_date', 'ASC')
             ->get_all();
+        $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+        $overdueInterestBalance = 0;
+        foreach ($schedules as &$schedule) {
+            $storedCalculatedAt = $schedule['overdue_interest_calculated_at'] ?? null;
+            $storedRemainderUnits = (int) ($schedule['overdue_interest_remainder_units'] ?? 0);
+            $storedStatus = (string) $schedule['status'];
+            $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                $schedule,
+                (int) round((float) $loan['overdue_interest_rate'] * 100),
+                $today
+            );
+            $schedule = array_merge($schedule, $accrual);
+            $baseBalance = max(
+                0,
+                self::money_to_cents((string) $schedule['total_due'])
+                    - self::money_to_cents((string) $schedule['paid_amount'])
+            );
+            $schedule['status'] = $baseBalance === 0 && $accrual['overdue_interest_balance_cents'] === 0
+                ? 'paid'
+                : ((string) $schedule['due_date'] < $today ? 'overdue' : $storedStatus);
+            if ($accrual['new_overdue_interest_cents'] > 0
+                || $accrual['overdue_interest_remainder_units'] !== $storedRemainderUnits
+                || $accrual['overdue_interest_calculated_at'] !== $storedCalculatedAt
+                || $schedule['status'] !== $storedStatus) {
+                $this->db->table('loan_schedules')->where('id', (int) $schedule['id'])->update([
+                    'overdue_interest_accrued' => $accrual['overdue_interest_accrued'],
+                    'overdue_interest_remainder_units' => $accrual['overdue_interest_remainder_units'],
+                    'overdue_interest_calculated_at' => $accrual['overdue_interest_calculated_at'],
+                    'status' => $schedule['status']
+                ]);
+            }
+            $overdueInterestBalance += $accrual['overdue_interest_balance_cents'];
+        }
+        unset($schedule);
+        if ($amount > $balance + $overdueInterestBalance) {
+            throw new DomainException('The paid loan repayment no longer matches the eligible loan balance.');
+        }
         try {
             $allocation = allocateLoanRepayment($amount, $schedules);
         } catch (InvalidArgumentException $error) {
@@ -865,11 +921,32 @@ class ApiCheckout extends Controller
                 'paid_amount' => $schedule['paid_amount'],
                 'principal_paid' => $schedule['principal_paid'],
                 'interest_paid' => $schedule['interest_paid'],
+                'overdue_interest_accrued' => $schedule['overdue_interest_accrued'],
+                'overdue_interest_paid' => $schedule['overdue_interest_paid'],
+                'overdue_interest_remainder_units' => $schedule['overdue_interest_remainder_units'],
                 'status' => $schedule['status']
             ]);
         }
         $principal_paid = $allocation['principal_paid'];
         $interest_paid = $allocation['interest_paid'];
+        $updatedSchedulesById = [];
+        foreach ($allocation['schedules'] as $updatedSchedule) {
+            $updatedSchedulesById[(int) $updatedSchedule['id']] = $updatedSchedule;
+        }
+        $remainingOverdueInterest = 0;
+        foreach ($schedules as $schedule) {
+            $updatedSchedule = $updatedSchedulesById[(int) $schedule['id']] ?? null;
+            $paidOverdueInterest = $updatedSchedule
+                ? self::money_to_cents((string) $updatedSchedule['overdue_interest_paid'])
+                : self::money_to_cents((string) $schedule['overdue_interest_paid']);
+            $accruedOverdueInterest = $updatedSchedule
+                ? self::money_to_cents((string) $updatedSchedule['overdue_interest_accrued'])
+                : self::money_to_cents((string) $schedule['overdue_interest_accrued']);
+            $remainingOverdueInterest += max(
+                0,
+                $accruedOverdueInterest - $paidOverdueInterest
+            );
+        }
 
         $inserted = $this->db->table('loan_payments')->insert([
             'loan_id' => (int) $loan['id'],
@@ -878,6 +955,7 @@ class ApiCheckout extends Controller
             'amount_paid' => $payment['amount'],
             'principal_paid' => self::format_cents($principal_paid),
             'interest_paid' => self::format_cents($interest_paid),
+            'overdue_interest_paid' => self::format_cents($allocation['overdue_interest_paid']),
             'breakdown_recorded' => 1,
             'payment_method' => $payment['payment_method'] ?? 'xendit',
             'reference_no' => $payment['reference_no'],
@@ -886,11 +964,11 @@ class ApiCheckout extends Controller
         if (!$inserted) {
             throw new RuntimeException('The confirmed loan payment could not be recorded.');
         }
-        $new_balance = $balance - $amount;
+        $new_balance = $balance - $principal_paid - $interest_paid;
         $this->db->table('loans')->where('id', (int) $loan['id'])->update([
             'current_balance' => self::format_cents($new_balance),
             'total_paid' => self::format_cents(self::money_to_cents((string) $loan['total_paid']) + $amount),
-            'status' => $new_balance === 0 ? 'completed' : 'active'
+            'status' => $new_balance === 0 && $remainingOverdueInterest === 0 ? 'completed' : 'active'
         ]);
 
     }

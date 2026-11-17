@@ -22,7 +22,9 @@ $payload = paymentReminderBuildEmail(
             'source_id' => 17,
             'due_date' => '2026-11-15',
             'reference' => 'LN-00017',
-            'amount' => '250.00'
+            'amount' => '250.00',
+            'overdue_interest_rate' => '6.00',
+            'overdue_interest_amount' => '1.50'
         ],
         [
             'reminder_type' => 'paluwagan_contribution',
@@ -38,6 +40,8 @@ $payload = paymentReminderBuildEmail(
 assertReminderContains('Loan installment', $payload['htmlContent'], 'The reminder should identify missed loan installments');
 assertReminderContains('Daily Paluwagan contribution', $payload['htmlContent'], 'The reminder should identify missed daily contributions');
 assertReminderContains('PHP 250.00', $payload['textContent'], 'The loan reminder should include the amount still due');
+assertReminderContains('6.00% yearly', $payload['textContent'], 'The loan reminder should disclose the overdue interest rate');
+assertReminderContains('overdue interest 6.00% yearly (PHP 1.50)', $payload['textContent'], 'The loan reminder should state the overdue interest charge');
 assertReminderContains('PHP 50.00', $payload['textContent'], 'The Paluwagan reminder should include the missed contribution amount');
 assertReminderContains('&lt;Member&gt;', $payload['htmlContent'], 'Member names should be escaped in HTML');
 assertReminderContains('&lt;Cycle A&gt;', $payload['htmlContent'], 'Cycle names should be escaped in HTML');

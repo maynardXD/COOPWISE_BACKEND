@@ -87,7 +87,7 @@ foreach ($members as $member) {
         if ((int) $memberSettings['loan_autopay_enabled'] === 1) {
             $loanTotals = [];
             $schedules = $db->prepare(
-                "SELECT s.*, l.member_id, l.current_balance, l.total_paid
+                "SELECT s.*, l.member_id, l.current_balance, l.total_paid, l.overdue_interest_rate
                  FROM loan_schedules s
                  INNER JOIN loans l ON l.id = s.loan_id
                  WHERE l.member_id = ?
@@ -98,10 +98,44 @@ foreach ($members as $member) {
                  FOR UPDATE"
             );
             $schedules->execute([$memberId, $today]);
-            foreach ($schedules->fetchAll() as $schedule) {
+            $loanSchedules = $schedules->fetchAll();
+            $lateInterestByLoan = [];
+            foreach ($loanSchedules as &$schedule) {
+                $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                    $schedule,
+                    (int) round((float) $schedule['overdue_interest_rate'] * 100),
+                    $today
+                );
+                $schedule = array_merge($schedule, $accrual);
+                $baseRemaining = max(
+                    0,
+                    moneyToCents((string) $schedule['total_due']) - moneyToCents((string) $schedule['paid_amount'])
+                );
+                $schedule['status'] = $baseRemaining === 0 && $accrual['overdue_interest_balance_cents'] === 0
+                    ? 'paid'
+                    : ((string) $schedule['due_date'] < $today ? 'overdue' : (string) $schedule['status']);
+                $db->prepare(
+                    'UPDATE loan_schedules
+                     SET overdue_interest_accrued = ?, overdue_interest_remainder_units = ?,
+                         overdue_interest_calculated_at = ?, status = ?
+                     WHERE id = ?'
+                )->execute([
+                    $accrual['overdue_interest_accrued'],
+                    $accrual['overdue_interest_remainder_units'],
+                    $accrual['overdue_interest_calculated_at'],
+                    $schedule['status'],
+                    (int) $schedule['id']
+                ]);
+                $loanId = (int) $schedule['loan_id'];
+                $lateInterestByLoan[$loanId] =
+                    ($lateInterestByLoan[$loanId] ?? 0) + $accrual['overdue_interest_balance_cents'];
+            }
+            unset($schedule);
+            foreach ($loanSchedules as $schedule) {
                 $due = moneyToCents((string) $schedule['total_due']);
                 $alreadyPaid = moneyToCents((string) $schedule['paid_amount']);
-                $remainingDue = max(0, $due - $alreadyPaid);
+                $remainingDue = max(0, $due - $alreadyPaid)
+                    + $schedule['overdue_interest_balance_cents'];
                 if ($remainingDue === 0) {
                     $db->prepare("UPDATE loan_schedules SET status = 'paid' WHERE id = ?")->execute([(int) $schedule['id']]);
                     continue;
@@ -109,7 +143,8 @@ foreach ($members as $member) {
                 $loanId = (int) $schedule['loan_id'];
                 if (!isset($loanTotals[$loanId])) {
                     $loanTotals[$loanId] = [
-                        'balance' => moneyToCents((string) $schedule['current_balance']),
+                        'balance' => moneyToCents((string) $schedule['current_balance']) + ($lateInterestByLoan[$loanId] ?? 0),
+                        'contractual_balance' => moneyToCents((string) $schedule['current_balance']),
                         'paid' => moneyToCents((string) $schedule['total_paid'])
                     ];
                 }
@@ -128,6 +163,18 @@ foreach ($members as $member) {
                     $processed['partial_loan_installments']++;
                 }
 
+                $allocation = allocateLoanRepayment($payment, [$schedule]);
+                $updatedSchedule = $allocation['schedules'][0];
+                $previousOverdueInterest = max(
+                    0,
+                    moneyToCents((string) $schedule['overdue_interest_accrued'])
+                        - moneyToCents((string) $schedule['overdue_interest_paid'])
+                );
+                $remainingScheduleOverdueInterest = max(
+                    0,
+                    moneyToCents((string) $updatedSchedule['overdue_interest_accrued'])
+                        - moneyToCents((string) $updatedSchedule['overdue_interest_paid'])
+                );
                 $reference = 'CW-AUTO-LN-' . (int) $schedule['id'] . '-' . date('YmdHis') . '-' . bin2hex(random_bytes(3));
                 $db->prepare(
                     'INSERT INTO savings_transactions
@@ -143,30 +190,49 @@ foreach ($members as $member) {
                 ]);
                 $db->prepare(
                     'INSERT INTO loan_payments
-                        (loan_id, member_id, paid_by_user_id, amount_paid, payment_method, reference_no, payment_date)
-                     VALUES (?, ?, NULL, ?, ?, ?, NOW())'
+                        (loan_id, member_id, paid_by_user_id, amount_paid, principal_paid, interest_paid,
+                         overdue_interest_paid, breakdown_recorded, payment_method, reference_no, payment_date)
+                     VALUES (?, ?, NULL, ?, ?, ?, ?, 1, ?, ?, NOW())'
                 )->execute([
                     (int) $schedule['loan_id'],
                     $memberId,
                     formatCents($payment),
+                    formatCents($allocation['principal_paid']),
+                    formatCents($allocation['interest_paid']),
+                    formatCents($allocation['overdue_interest_paid']),
                     'savings',
                     $reference
                 ]);
 
-                $paid = $alreadyPaid + $payment;
-                $scheduleStatus = $paid >= $due ? 'paid' : ($schedule['due_date'] < $today ? 'overdue' : 'pending');
-                $db->prepare('UPDATE loan_schedules SET paid_amount = ?, status = ? WHERE id = ?')
-                    ->execute([formatCents($paid), $scheduleStatus, (int) $schedule['id']]);
-                $loanBalance = max(0, $loanTotals[$loanId]['balance'] - $payment);
+                $db->prepare(
+                    'UPDATE loan_schedules
+                     SET paid_amount = ?, principal_paid = ?, interest_paid = ?, overdue_interest_accrued = ?,
+                         overdue_interest_paid = ?, overdue_interest_remainder_units = ?, status = ?
+                     WHERE id = ?'
+                )->execute([
+                    $updatedSchedule['paid_amount'],
+                    $updatedSchedule['principal_paid'],
+                    $updatedSchedule['interest_paid'],
+                    $updatedSchedule['overdue_interest_accrued'],
+                    $updatedSchedule['overdue_interest_paid'],
+                    $updatedSchedule['overdue_interest_remainder_units'],
+                    $updatedSchedule['status'],
+                    (int) $schedule['id']
+                ]);
+                $loanBalance = max(0, $loanTotals[$loanId]['contractual_balance']
+                    - $allocation['principal_paid'] - $allocation['interest_paid']);
+                $loanTotals[$loanId]['contractual_balance'] = $loanBalance;
+                $lateInterestByLoan[$loanId] += $remainingScheduleOverdueInterest - $previousOverdueInterest;
+                $loanTotals[$loanId]['balance'] = $loanBalance + $lateInterestByLoan[$loanId];
                 $loanPaid = $loanTotals[$loanId]['paid'] + $payment;
                 $db->prepare('UPDATE loans SET current_balance = ?, total_paid = ?, status = ? WHERE id = ?')
                     ->execute([
                         formatCents($loanBalance),
                         formatCents($loanPaid),
-                        $loanBalance === 0 ? 'completed' : 'active',
+                        $loanTotals[$loanId]['balance'] === 0 ? 'completed' : 'active',
                         $loanId
                     ]);
-                $loanTotals[$loanId] = ['balance' => $loanBalance, 'paid' => $loanPaid];
+                $loanTotals[$loanId]['paid'] = $loanPaid;
                 $balance -= $payment;
                 $processed['loan_installments']++;
             }

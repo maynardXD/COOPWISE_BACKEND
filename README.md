@@ -69,11 +69,30 @@ reuse its branding, images, or website copy.
    basis is loan interest paid during the fiscal year. Verify actual bylaws,
    accounting, and required approvals before applying any real cooperative
    rules.
+   Then run `database/coopwise_loan_overdue_interest_upgrade.sql` to add annual
+   overdue-interest rates and accrual tracking. New loan products default to
+   6% per year for future applications; existing loans retain 0% so their
+   agreed terms are not changed retroactively. The 6% default is a configurable
+   reference to the Philippine legal-interest rate for delay under the Civil
+   Code framework (see [Articles 1956 and 2209](https://lawphil.net/statutes/repacts/ra1949/ra_386_1949.html)),
+   not a CDA-mandated cooperative penalty rate. Cooperatives must approve and
+   disclose their own written loan terms before using a nonzero rate. The demo
+   calculates simple, non-compounding interest on each overdue installment's
+   unpaid principal from the day after its due date, capped at that
+   installment's principal. Partial payments are allocated to overdue
+   interest, scheduled interest, then principal. Scheduled reminders and
+   manual loan-detail emails disclose the rate and accrued charge.
+   Run `database/coopwise_terms_acceptance_upgrade.sql` to add the first-login
+   terms status. Existing accounts are exempted by the migration; new accounts
+   are asked to review and accept the current terms before reaching the portal.
    Members can choose a loan-purpose category (medical, emergency, allowance,
    education, or livelihood/business) and explain other purposes. Loan
    repayments can be paid in full from the payment form, while staff can record
    payments already received; pending online checkout amounts remain reserved
-   and cannot be double-counted.
+   and cannot be double-counted. Approved and active loans share one staff
+   filter. The payment form clamps staff-entered amounts to the balance that
+   is not reserved by checkout, and the API independently enforces the limit.
+   Loan schedules and payment history show accrued and paid overdue interest.
    The admin can also record a personal investment from the Share Capital
    screen. If the admin has no linked investor profile, one is created for
    share-capital accounting only; the admin role does not gain member savings
@@ -134,8 +153,8 @@ connect to a configured or production database.
   uses the same endpoints, keeps a short-lived access token in tab session
   storage, and calls `/api/me`; the API allows only configured CORS origins.
 - `Coopwise_access` reloads the current account and member birth date from the
-  database before protected pages are served. Members younger than 18 may view
-  their own profile and savings; loan and payment pages require an adult member.
+  database before protected pages are served. Members under 20 may view their
+  own profile and savings, but loan services require age 20 or older.
   Admins and officers have staff-only pages.
 - Adult members first submit up to five JPEG, PNG, or WebP supporting document
   images (5 MB each, 7 MB combined) for private staff review. Document
@@ -219,8 +238,9 @@ connect to a configured or production database.
   clear migration error if that table is absent.
 - Members may separately opt in to loan-installment and/or daily Paluwagan
   payments from savings. Both preferences are off by default. When enabled,
-  `scripts/daily_savings_auto_pay.php` processes due amounts and records the
-  savings withdrawal together with its loan-payment or Paluwagan contribution.
+  `scripts/daily_savings_auto_pay.php` processes due amounts (including
+  accrued loan overdue interest) and records the savings withdrawal together
+  with its loan-payment or Paluwagan contribution.
   If loan savings are insufficient, an available partial amount is applied to
   the earliest due installment; a Paluwagan contribution is skipped if its full
   daily amount is unavailable. The script must be configured as a recurring
@@ -361,10 +381,11 @@ in the LavaLust app and have not yet been migrated to the separate frontend.
    managed MySQL database). For a new database, import `coopwise_schema.sql`.
    For an existing database, back it up and apply the additive upgrades in
    order: registration, loans/cooperative, documents/payments, financial
-   workflows, share capital, then Xendit/email. Skip any upgrade already
-   applied. Use a trusted database client and do not drop existing tables. The
-   Xendit/email migration depends on the earlier loan, cycle, and
-   share-capital tables. For a database where `/api/cooperative/cycles`
+   workflows, share capital, then Xendit/email, cooperative-finance,
+   overdue-interest, and terms-acceptance upgrades. Skip any upgrade already applied. Use a trusted
+   database client and do not drop existing tables. The Xendit/email migration
+   depends on the earlier loan, cycle, and share-capital tables. For a
+   database where `/api/cooperative/cycles`
    returns a schema-related error, back up the database and apply
    `coopwise_loans_cooperative_upgrade.sql` before retrying. For Aiven MySQL,
    upload its CA certificate in Render's **Secret Files** as

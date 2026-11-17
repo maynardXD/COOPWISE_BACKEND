@@ -40,7 +40,7 @@ class ApiLoans extends Controller
         }
 
         $query = $this->db->table('loan_types')
-            ->select('id, name, description, interest_rate, max_amount, max_term_months, status');
+            ->select('id, name, description, interest_rate, overdue_interest_rate, max_amount, max_term_months, status');
         if ($user['role'] === 'member') {
             $query->where('status', 'active')->where('max_amount', '>', 0);
         }
@@ -65,6 +65,15 @@ class ApiLoans extends Controller
             $this->api->respond(['eligibility' => null]);
         }
         $member = $this->member_profile($user);
+        $age = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
+        if ($age === null || $age < 20) {
+            $this->api->respond(['eligibility' => [
+                'eligible' => false,
+                'loan_age_eligible' => false,
+                'max_eligible_amount' => '0.00',
+                'reasons' => ['Loan services are available only to members aged 20 and over.']
+            ]]);
+        }
         $this->require_finance_schema();
         $eligibility = $this->member_eligibility($member);
         $eligibility['active_loans'] = $this->db->raw(
@@ -194,12 +203,27 @@ class ApiLoans extends Controller
                 throw new DomainException('Only an approved or active loan can receive a payment.');
             }
             $balance = self::money_to_cents((string) $loan['current_balance']);
+            $schedules = $this->db->raw(
+                "SELECT * FROM loan_schedules
+                 WHERE loan_id = ? AND status IN ('pending', 'overdue')
+                 ORDER BY due_date ASC, id ASC FOR UPDATE",
+                [(int) $loan_id]
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+            $interest = $this->accrue_loan_schedules(
+                $schedules,
+                (string) $loan['overdue_interest_rate'],
+                $today,
+                true
+            );
+            $schedules = $interest['schedules'];
             $pending = $this->db->raw(
                 "SELECT COALESCE(SUM(amount), 0) AS total FROM payment_transactions
                  WHERE loan_id = ? AND status IN ('pending', 'needs_review')",
                 [(int) $loan_id]
             )->fetch(PDO::FETCH_ASSOC);
-            $available = $balance - self::money_to_cents((string) ($pending['total'] ?? '0.00'));
+            $available = $balance + $interest['balance_cents']
+                - self::money_to_cents((string) ($pending['total'] ?? '0.00'));
             if ($amount > $available) {
                 throw new DomainException(
                     'The payment cannot exceed the remaining amount not already reserved by another checkout: PHP '
@@ -207,12 +231,6 @@ class ApiLoans extends Controller
                 );
             }
 
-            $schedules = $this->db->raw(
-                "SELECT * FROM loan_schedules
-                 WHERE loan_id = ? AND status IN ('pending', 'overdue')
-                 ORDER BY due_date ASC, id ASC FOR UPDATE",
-                [(int) $loan_id]
-            )->fetchAll(PDO::FETCH_ASSOC);
             try {
                 $allocation = allocateLoanRepayment($amount, $schedules);
             } catch (InvalidArgumentException $error) {
@@ -225,6 +243,9 @@ class ApiLoans extends Controller
                         'paid_amount' => $schedule['paid_amount'],
                         'principal_paid' => $schedule['principal_paid'],
                         'interest_paid' => $schedule['interest_paid'],
+                        'overdue_interest_accrued' => $schedule['overdue_interest_accrued'],
+                        'overdue_interest_paid' => $schedule['overdue_interest_paid'],
+                        'overdue_interest_remainder_units' => $schedule['overdue_interest_remainder_units'],
                         'status' => $schedule['status']
                     ]);
                 if ($updated !== 1) {
@@ -254,6 +275,7 @@ class ApiLoans extends Controller
                 'amount_paid' => self::format_cents($amount),
                 'principal_paid' => self::format_cents($allocation['principal_paid']),
                 'interest_paid' => self::format_cents($allocation['interest_paid']),
+                'overdue_interest_paid' => self::format_cents($allocation['overdue_interest_paid']),
                 'breakdown_recorded' => 1,
                 'payment_method' => $payment_method,
                 'reference_no' => $reference,
@@ -263,13 +285,31 @@ class ApiLoans extends Controller
                 throw new RuntimeException('The loan repayment ledger entry could not be saved.');
             }
 
-            $new_balance = $balance - $amount;
+            $new_balance = $balance - $allocation['principal_paid'] - $allocation['interest_paid'];
+            $updatedSchedulesById = [];
+            foreach ($allocation['schedules'] as $updatedSchedule) {
+                $updatedSchedulesById[(int) $updatedSchedule['id']] = $updatedSchedule;
+            }
+            $remaining_overdue_interest = 0;
+            foreach ($schedules as $schedule) {
+                $updatedSchedule = $updatedSchedulesById[(int) $schedule['id']] ?? null;
+                $paid_overdue_interest = $updatedSchedule
+                    ? self::money_to_cents((string) $updatedSchedule['overdue_interest_paid'])
+                    : self::money_to_cents((string) $schedule['overdue_interest_paid']);
+                $accrued_overdue_interest = $updatedSchedule
+                    ? self::money_to_cents((string) $updatedSchedule['overdue_interest_accrued'])
+                    : self::money_to_cents((string) $schedule['overdue_interest_accrued']);
+                $remaining_overdue_interest += max(
+                    0,
+                    $accrued_overdue_interest - $paid_overdue_interest
+                );
+            }
             $updated_loan = $this->db->table('loans')
                 ->where('id', (int) $loan_id)
                 ->update([
                     'current_balance' => self::format_cents($new_balance),
                     'total_paid' => self::format_cents(self::money_to_cents((string) $loan['total_paid']) + $amount),
-                    'status' => $new_balance === 0 ? 'completed' : 'active'
+                    'status' => $new_balance === 0 && $remaining_overdue_interest === 0 ? 'completed' : 'active'
                 ]);
             if ($updated_loan !== 1) {
                 throw new RuntimeException('The loan balance could not be updated.');
@@ -314,7 +354,8 @@ class ApiLoans extends Controller
 
         $loan = $this->db->raw(
             'SELECT l.id, l.member_id, l.loan_code, l.principal_amount, l.approved_amount,
-                    l.current_balance, l.total_paid, l.interest_rate, l.term_months, l.purpose,
+                    l.current_balance, l.total_paid, l.interest_rate, l.overdue_interest_rate,
+                    l.term_months, l.purpose,
                     l.status, l.created_at, lt.name AS loan_type_name,
                     m.member_number, m.first_name, m.last_name,
                     u.email AS account_email, u.status AS account_status
@@ -337,12 +378,18 @@ class ApiLoans extends Controller
         }
 
         $schedule = $this->db->raw(
-            'SELECT due_date, principal_due, interest_due, total_due, paid_amount, status
+            'SELECT id, due_date, principal_due, principal_paid, interest_due, total_due, paid_amount,
+                    overdue_interest_accrued, overdue_interest_paid, overdue_interest_remainder_units,
+                    overdue_interest_calculated_at, status
              FROM loan_schedules
              WHERE loan_id = ?
              ORDER BY due_date ASC, id ASC',
             [(int) $loan_id]
         )->fetchAll(PDO::FETCH_ASSOC);
+        $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+        $interest = $this->accrue_loan_schedules($schedule, (string) $loan['overdue_interest_rate'], $today, false);
+        $schedule = $interest['schedules'];
+        $loan['overdue_interest_balance'] = self::format_cents($interest['balance_cents']);
         $email = self::loan_payment_email_content($loan, $schedule);
         $delivery = sendBrevoTransactionalEmail(
             (string) $loan['account_email'],
@@ -370,12 +417,13 @@ class ApiLoans extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $this->require_finance_schema();
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         $requested_status = '';
         if (!$member) {
             $requested_status = trim((string) ($_GET['status'] ?? ''));
             if ($requested_status !== ''
-                && !in_array($requested_status, ['pending', 'approved', 'active', 'completed', 'rejected'], true)) {
+                && !in_array($requested_status, ['pending', 'approved', 'active', 'approved_active', 'completed', 'rejected'], true)) {
                 $this->api->respond_error('Choose a valid loan status filter.', 422);
             }
         }
@@ -396,11 +444,13 @@ class ApiLoans extends Controller
         )->fetchAll(PDO::FETCH_ASSOC);
 
         $query = $this->db->table('loans l')
-            ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
+            ->select('l.id, l.member_id, l.loan_type_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.total_paid, l.term_months, l.interest_rate, l.overdue_interest_rate, l.purpose, l.status, l.review_note, l.created_at, lt.name AS loan_type_name, m.member_number, m.first_name, m.last_name')
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
             ->inner_join('members m', 'm.id = l.member_id');
         if ($member) {
             $query->where('l.member_id', (int) $member['id']);
+        } elseif ($requested_status === 'approved_active') {
+            $query->in('l.status', ['approved', 'active']);
         } elseif ($requested_status !== '') {
             $query->where('l.status', $requested_status);
         }
@@ -425,9 +475,39 @@ class ApiLoans extends Controller
                 $reserved_by_loan[(int) $pending_payment['loan_id']] =
                     self::money_to_cents((string) $pending_payment['total']);
             }
+            $schedule_rows = $this->db->raw(
+                "SELECT loan_id, due_date, principal_due, principal_paid, total_due, paid_amount,
+                        status, overdue_interest_accrued, overdue_interest_paid,
+                        overdue_interest_remainder_units, overdue_interest_calculated_at
+                 FROM loan_schedules
+                 WHERE loan_id IN ({$placeholders}) AND status IN ('pending', 'overdue')",
+                $loan_ids
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $annual_rates = [];
+            foreach ($loans as $loan) {
+                $annual_rates[(int) $loan['id']] = (string) $loan['overdue_interest_rate'];
+            }
+            $overdue_interest_by_loan = [];
+            $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+            foreach ($schedule_rows as $schedule_row) {
+                $loanId = (int) $schedule_row['loan_id'];
+                $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                    $schedule_row,
+                    (int) round((float) ($annual_rates[$loanId] ?? 0) * 100),
+                    $today
+                );
+                $overdue_interest_by_loan[$loanId] =
+                    ($overdue_interest_by_loan[$loanId] ?? 0) + $accrual['overdue_interest_balance_cents'];
+            }
             foreach ($loans as &$loan) {
+                $base_balance = self::money_to_cents((string) $loan['current_balance']);
+                $overdue_interest_balance = $overdue_interest_by_loan[(int) $loan['id']] ?? 0;
+                $total_balance = $base_balance + $overdue_interest_balance;
+                $loan['contractual_balance'] = self::format_cents($base_balance);
+                $loan['overdue_interest_balance'] = self::format_cents($overdue_interest_balance);
+                $loan['current_balance'] = self::format_cents($total_balance);
                 $loan['available_repayment_amount'] = self::format_cents(cooperativeAvailableRepayment(
-                    self::money_to_cents((string) $loan['current_balance']),
+                    $total_balance,
                     $reserved_by_loan[(int) $loan['id']] ?? 0
                 ));
             }
@@ -456,8 +536,8 @@ class ApiLoans extends Controller
         $member = $this->member_profile($user);
         $this->require_finance_schema();
         $age = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
-        if ($age === null || $age < 18) {
-            $this->api->respond_error('Loan applications are available to members aged 18 and over.', 403);
+        if ($age === null || $age < 20) {
+            $this->api->respond_error('Loan applications are available to members aged 20 and over.', 403);
         }
         $readiness = $this->latest_readiness((int) $member['id']);
         if (!$readiness || $readiness['status'] !== 'approved') {
@@ -468,6 +548,7 @@ class ApiLoans extends Controller
         $principal = self::money_to_cents(trim((string) ($data['amount'] ?? '')));
         $term = filter_var($data['term_months'] ?? null, FILTER_VALIDATE_INT);
         $purpose = trim((string) ($data['purpose'] ?? ''));
+        $accept_overdue_terms = ($data['accept_overdue_terms'] ?? '') === '1';
         $allowed_purposes = ['Medical', 'Emergency', 'Allowance', 'Education', 'Livelihood / business'];
         $is_other_purpose = strpos($purpose, 'Other: ') === 0
             && preg_match('/\A[A-Za-z ]{1,128}\z/', trim(substr($purpose, 7))) === 1;
@@ -483,6 +564,9 @@ class ApiLoans extends Controller
             || $principal > self::money_to_cents((string) $product['max_amount'])
             || $term > (int) $product['max_term_months']) {
             $this->api->respond_error('The requested amount or term exceeds this product’s limits.', 422);
+        }
+        if ((float) $product['overdue_interest_rate'] > 0 && !$accept_overdue_terms) {
+            $this->api->respond_error('Accept the disclosed overdue-interest terms before submitting this application.', 422);
         }
         $this->db->transaction();
         try {
@@ -507,6 +591,7 @@ class ApiLoans extends Controller
                 'principal_amount' => self::format_cents($principal),
                 'approved_amount' => self::format_cents($principal),
                 'interest_rate' => number_format((float) $product['interest_rate'], 2, '.', ''),
+                'overdue_interest_rate' => number_format((float) $product['overdue_interest_rate'], 2, '.', ''),
                 'term_months' => $term,
                 'purpose' => $purpose !== '' ? $purpose : null,
                 'status' => 'pending',
@@ -538,7 +623,7 @@ class ApiLoans extends Controller
         if ($user['role'] === 'member') {
             $member = $this->member_profile($user);
             $age = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
-            if ($age === null || $age < 18) {
+            if ($age === null || $age < 20) {
                 $this->api->respond(['available' => false, 'readiness' => null, 'documents' => []]);
             }
             $readiness = $this->latest_readiness((int) $member['id']);
@@ -771,9 +856,10 @@ class ApiLoans extends Controller
     {
         $this->api->require_method('GET');
         $user = $this->authenticated_user();
+        $this->require_finance_schema();
         $loan_id = (int) $loan_id;
         $loan = $this->db->table('loans l')
-            ->select('l.id, l.member_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.interest_rate, l.term_months, l.status, lt.name AS loan_type_name')
+            ->select('l.id, l.member_id, l.loan_code, l.principal_amount, l.approved_amount, l.current_balance, l.interest_rate, l.overdue_interest_rate, l.term_months, l.status, lt.name AS loan_type_name')
             ->inner_join('loan_types lt', 'lt.id = l.loan_type_id')
             ->where('l.id', $loan_id)
             ->get();
@@ -787,26 +873,57 @@ class ApiLoans extends Controller
             ->where('loan_id', $loan_id)
             ->order_by('due_date', 'ASC')
             ->get_all();
-        $totals = ['principal' => 0, 'interest' => 0, 'due' => 0, 'paid' => 0];
-        $remaining = self::money_to_cents((string) $loan['current_balance']);
+        $totals = ['principal' => 0, 'interest' => 0, 'due' => 0, 'paid' => 0, 'overdue_interest' => 0];
+        $baseRemaining = self::money_to_cents((string) $loan['current_balance']);
+        $today = (new DateTimeImmutable('today', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
+        $totalOverdueInterest = 0;
+        foreach ($schedule as $installment) {
+            $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                $installment,
+                (int) round((float) $loan['overdue_interest_rate'] * 100),
+                $today
+            );
+            $totalOverdueInterest += $accrual['overdue_interest_balance_cents'];
+        }
+        $overdueInterestRemaining = $totalOverdueInterest;
         foreach ($schedule as &$installment) {
+            $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+                $installment,
+                (int) round((float) $loan['overdue_interest_rate'] * 100),
+                $today
+            );
             $principal = self::money_to_cents((string) $installment['principal_due']);
             $interest = self::money_to_cents((string) $installment['interest_due']);
             $due = self::money_to_cents((string) $installment['total_due']);
             $paid = self::money_to_cents((string) $installment['paid_amount']);
+            $latePaid = self::money_to_cents((string) $installment['overdue_interest_paid']);
+            $lateDue = self::money_to_cents((string) $accrual['overdue_interest_accrued']);
+            $lateRemaining = max(0, $lateDue - $latePaid);
             $totals['principal'] += $principal;
             $totals['interest'] += $interest;
-            $totals['due'] += $due;
-            $totals['paid'] += $paid;
-            $remaining = max(0, $remaining - max(0, $due - $paid));
-            $installment['remaining_after'] = self::format_cents($remaining);
+            $totals['due'] += $due + $lateDue;
+            $totals['paid'] += $paid + $latePaid;
+            $totals['overdue_interest'] += $lateDue;
+            $installment = array_merge($installment, $accrual);
+            $installment['overdue_interest_remaining'] = self::format_cents($lateRemaining);
+            $installment['display_total_due'] = self::format_cents($due + $lateDue);
+            $installment['display_paid_amount'] = self::format_cents($paid + $latePaid);
+            $baseRemaining = max(0, $baseRemaining - max(0, $due - $paid));
+            $overdueInterestRemaining = max(0, $overdueInterestRemaining - $lateRemaining);
+            $installment['remaining_after'] = self::format_cents($baseRemaining + $overdueInterestRemaining);
         }
         unset($installment);
+        $loan['contractual_balance'] = (string) $loan['current_balance'];
+        $loan['overdue_interest_balance'] = self::format_cents($totalOverdueInterest);
+        $loan['current_balance'] = self::format_cents(
+            self::money_to_cents((string) $loan['current_balance']) + $totalOverdueInterest
+        );
         $this->api->respond([
             'loan' => $loan,
             'schedule' => $schedule,
             'total_principal' => self::format_cents($totals['principal']),
             'total_interest' => self::format_cents($totals['interest']),
+            'total_overdue_interest' => self::format_cents($totals['overdue_interest']),
             'total_due' => self::format_cents($totals['due']),
             'total_paid' => self::format_cents($totals['paid']),
             'generated_at' => date('Y-m-d H:i:s')
@@ -820,7 +937,7 @@ class ApiLoans extends Controller
         $this->require_finance_schema();
         $member = $user['role'] === 'member' ? $this->member_profile($user) : null;
         $query = $this->db->table('loan_payments lp')
-            ->select('lp.id, lp.loan_id, lp.member_id, lp.amount_paid, lp.principal_paid, lp.interest_paid, lp.breakdown_recorded, lp.payment_method, lp.reference_no, lp.payment_date, l.loan_code, m.first_name, m.last_name')
+            ->select('lp.id, lp.loan_id, lp.member_id, lp.amount_paid, lp.principal_paid, lp.interest_paid, lp.overdue_interest_paid, lp.breakdown_recorded, lp.payment_method, lp.reference_no, lp.payment_date, l.loan_code, m.first_name, m.last_name')
             ->inner_join('loans l', 'l.id = lp.loan_id')
             ->inner_join('members m', 'm.id = lp.member_id');
         if ($member) {
@@ -903,8 +1020,9 @@ class ApiLoans extends Controller
         };
         $memberName = trim((string) $loan['first_name'] . ' ' . (string) $loan['last_name']);
         $loanBalanceCents = self::money_to_cents((string) $loan['current_balance']);
+        $overdueInterestBalanceCents = self::money_to_cents((string) ($loan['overdue_interest_balance'] ?? '0.00'));
         $totalPaidCents = self::money_to_cents((string) $loan['total_paid']);
-        if ($loanBalanceCents === false || $totalPaidCents === false) {
+        if ($loanBalanceCents === false || $overdueInterestBalanceCents === false || $totalPaidCents === false) {
             throw new RuntimeException('A stored loan balance is invalid.');
         }
 
@@ -918,9 +1036,13 @@ class ApiLoans extends Controller
             'Date applied' => (string) $loan['created_at'],
             'Requested amount' => 'PHP ' . $formatAmount((string) $loan['principal_amount']),
             'Approved amount' => 'PHP ' . $formatAmount((string) $loan['approved_amount']),
-            'Current loan balance' => 'PHP ' . self::format_cents($loanBalanceCents),
+            'Contractual loan balance' => 'PHP ' . self::format_cents($loanBalanceCents),
+            'Overdue interest balance' => 'PHP ' . self::format_cents($overdueInterestBalanceCents),
+            'Current loan balance including overdue interest' => 'PHP ' .
+                self::format_cents($loanBalanceCents + $overdueInterestBalanceCents),
             'Total paid' => 'PHP ' . self::format_cents($totalPaidCents),
             'Interest rate' => (string) $loan['interest_rate'] . '% monthly',
+            'Overdue interest rate' => (string) ($loan['overdue_interest_rate'] ?? '0.00') . '% per year, simple, on unpaid installment principal',
             'Term' => (string) $loan['term_months'] . ' months',
             'Purpose' => trim((string) ($loan['purpose'] ?? '')) ?: 'Not specified'
         ];
@@ -931,10 +1053,14 @@ class ApiLoans extends Controller
         foreach ($schedule as $installment) {
             $dueCents = self::money_to_cents((string) $installment['total_due']);
             $paidCents = self::money_to_cents((string) $installment['paid_amount']);
-            if ($dueCents === false || $paidCents === false) {
+            $overdueInterestCents = self::money_to_cents((string) $installment['overdue_interest_accrued']);
+            $overdueInterestPaidCents = self::money_to_cents((string) $installment['overdue_interest_paid']);
+            if ($dueCents === false || $paidCents === false
+                || $overdueInterestCents === false || $overdueInterestPaidCents === false) {
                 throw new RuntimeException('A stored installment amount is invalid.');
             }
-            $remainingCents = max(0, $dueCents - $paidCents);
+            $remainingCents = max(0, $dueCents - $paidCents)
+                + max(0, $overdueInterestCents - $overdueInterestPaidCents);
             $installmentStatus = ucfirst((string) $installment['status']);
             if ($nextDueDate === null && $remainingCents > 0
                 && in_array($installment['status'], ['pending', 'overdue'], true)) {
@@ -943,15 +1069,17 @@ class ApiLoans extends Controller
             $scheduleRows .= '<tr><td>' . $escape($installment['due_date']) .
                 '</td><td>PHP ' . $escape($formatAmount((string) $installment['principal_due'])) .
                 '</td><td>PHP ' . $escape($formatAmount((string) $installment['interest_due'])) .
-                '</td><td>PHP ' . $escape($formatAmount((string) $installment['total_due'])) .
-                '</td><td>PHP ' . $escape(self::format_cents($paidCents)) .
+                '</td><td>PHP ' . $escape(self::format_cents($overdueInterestCents)) .
+                '</td><td>PHP ' . $escape(self::format_cents($dueCents + $overdueInterestCents)) .
+                '</td><td>PHP ' . $escape(self::format_cents($paidCents + $overdueInterestPaidCents)) .
                 '</td><td>PHP ' . $escape(self::format_cents($remainingCents)) .
                 '</td><td>' . $escape($installmentStatus) . '</td></tr>';
             $scheduleText[] = $installment['due_date'] . ' | Principal PHP ' .
                 $formatAmount((string) $installment['principal_due']) . ' | Interest PHP ' .
-                $formatAmount((string) $installment['interest_due']) . ' | Due PHP ' .
-                $formatAmount((string) $installment['total_due']) . ' | Paid PHP ' .
-                self::format_cents($paidCents) . ' | Remaining PHP ' .
+                $formatAmount((string) $installment['interest_due']) . ' | Overdue interest PHP ' .
+                self::format_cents($overdueInterestCents) . ' | Total due PHP ' .
+                self::format_cents($dueCents + $overdueInterestCents) . ' | Paid PHP ' .
+                self::format_cents($paidCents + $overdueInterestPaidCents) . ' | Remaining PHP ' .
                 self::format_cents($remainingCents) . ' | ' . $installmentStatus;
         }
         $details['Next due date'] = $nextDueDate ?: 'No outstanding scheduled installment';
@@ -966,7 +1094,7 @@ class ApiLoans extends Controller
 
         $scheduleHtml = $scheduleRows !== ''
             ? '<table border="1" cellpadding="6" cellspacing="0"><thead><tr>' .
-                '<th>Due date</th><th>Principal</th><th>Interest</th><th>Installment</th>' .
+                '<th>Due date</th><th>Principal</th><th>Interest</th><th>Overdue interest</th><th>Total due</th>' .
                 '<th>Paid</th><th>Remaining</th><th>Status</th></tr></thead><tbody>' .
                 $scheduleRows . '</tbody></table>'
             : '<p>No repayment installments are recorded for this loan.</p>';
@@ -1090,17 +1218,73 @@ class ApiLoans extends Controller
                      'minimum_membership_days', 'minimum_paid_up_share_capital',
                      'minimum_savings_balance', 'loan_to_paid_up_share_capital_multiplier'
                  )) OR
-                 (table_name = 'loan_payments' AND column_name IN ('principal_paid', 'interest_paid', 'breakdown_recorded')) OR
-                 (table_name = 'loan_schedules' AND column_name IN ('principal_paid', 'interest_paid'))
+                 (table_name = 'loan_types' AND column_name = 'overdue_interest_rate') OR
+                 (table_name = 'loans' AND column_name = 'overdue_interest_rate') OR
+                 (table_name = 'loan_payments' AND column_name IN (
+                     'principal_paid', 'interest_paid', 'overdue_interest_paid', 'breakdown_recorded'
+                 )) OR
+                 (table_name = 'loan_schedules' AND column_name IN (
+                     'principal_paid', 'interest_paid', 'overdue_interest_accrued',
+                     'overdue_interest_paid', 'overdue_interest_remainder_units',
+                     'overdue_interest_calculated_at'
+                 ))
              )"
         )->fetchColumn();
-        if ((int) $columns !== 9) {
-            error_log('CoopWise cooperative finance schema is missing; apply database/coopwise_cooperative_finance_upgrade.sql.');
+        if ((int) $columns !== 16) {
+            error_log('CoopWise cooperative finance schema is missing; apply the cooperative-finance and loan-overdue-interest upgrades.');
             $this->api->respond_error(
-                'Loan eligibility and capital tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql in Navicat.',
+                'Loan eligibility and capital tracking are not configured. Back up the database, then run database/coopwise_cooperative_finance_upgrade.sql and database/coopwise_loan_overdue_interest_upgrade.sql in Navicat.',
                 503
             );
         }
+    }
+
+    private function accrue_loan_schedules(array $schedules, string $annual_rate, string $today, bool $persist): array
+    {
+        $rateBasisPoints = (int) round((float) $annual_rate * 100);
+        $interestBalance = 0;
+        foreach ($schedules as &$schedule) {
+            $storedCalculatedAt = $schedule['overdue_interest_calculated_at'] ?? null;
+            $storedRemainderUnits = (int) ($schedule['overdue_interest_remainder_units'] ?? 0);
+            $storedStatus = (string) $schedule['status'];
+            $accrual = cooperativeAccrueLoanScheduleOverdueInterest($schedule, $rateBasisPoints, $today);
+            $schedule = array_merge($schedule, $accrual);
+            $baseBalance = max(
+                0,
+                self::money_to_cents((string) $schedule['total_due'])
+                    - self::money_to_cents((string) $schedule['paid_amount'])
+            );
+            $schedule['status'] = $baseBalance === 0 && $accrual['overdue_interest_balance_cents'] === 0
+                ? 'paid'
+                : ((string) $schedule['due_date'] < $today
+                    ? 'overdue'
+                    : (string) $schedule['status']);
+            if ($persist && (
+                $accrual['new_overdue_interest_cents'] > 0
+                || $accrual['overdue_interest_remainder_units'] !== $storedRemainderUnits
+                || $accrual['overdue_interest_calculated_at'] !== $storedCalculatedAt
+                || $schedule['status'] !== $storedStatus
+            )) {
+                $updated = $this->db->table('loan_schedules')
+                    ->where('id', (int) $schedule['id'])
+                    ->update([
+                        'overdue_interest_accrued' => $accrual['overdue_interest_accrued'],
+                        'overdue_interest_remainder_units' => $accrual['overdue_interest_remainder_units'],
+                        'overdue_interest_calculated_at' => $accrual['overdue_interest_calculated_at'],
+                        'status' => $schedule['status']
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('An overdue installment could not be updated.');
+                }
+            }
+            $interestBalance += $accrual['overdue_interest_balance_cents'];
+        }
+        unset($schedule);
+
+        return [
+            'schedules' => $schedules,
+            'balance_cents' => $interestBalance
+        ];
     }
 
     private function readiness_documents(int $submission_id)
@@ -1117,8 +1301,8 @@ class ApiLoans extends Controller
         $this->api->require_method('POST');
         $member = $this->member_profile($user);
         $age = Coopwise_access::age_from_birth_date($member['birth_date'] ?? null);
-        if ($age === null || $age < 18) {
-            $this->api->respond_error('Loan document review is available to members aged 18 and over.', 403);
+        if ($age === null || $age < 20) {
+            $this->api->respond_error('Loan document review is available to members aged 20 and over.', 403);
         }
         $latest = $this->latest_readiness((int) $member['id']);
         if ($latest && in_array($latest['status'], ['pending', 'approved'], true)) {
@@ -1252,13 +1436,16 @@ class ApiLoans extends Controller
         $name = trim((string) ($data['name'] ?? ''));
         $description = trim((string) ($data['description'] ?? ''));
         $rate = trim((string) ($data['interest_rate'] ?? ''));
+        $overdue_rate = trim((string) ($data['overdue_interest_rate'] ?? '6.00'));
         $max_amount = self::money_to_cents(trim((string) ($data['max_amount'] ?? '')));
         $term = filter_var($data['max_term_months'] ?? null, FILTER_VALIDATE_INT);
         if ($name === '' || strlen($name) > 100 || strlen($description) > 255
             || !preg_match('/^(?:0|[1-9]\d{0,2})(?:\.\d{1,2})?$/', $rate)
-            || (float) $rate > 99.99 || $max_amount === false || $max_amount < 1
+            || (float) $rate > 99.99
+            || !preg_match('/^(?:0|[1-9]\d{0,2})(?:\.\d{1,2})?$/', $overdue_rate)
+            || (float) $overdue_rate > 99.99 || $max_amount === false || $max_amount < 1
             || !$term || $term > 120) {
-            $this->api->respond_error('Provide a name, monthly rate 0–99.99%, positive maximum amount, and term from 1–120 months.', 422);
+            $this->api->respond_error('Provide a name, monthly rate and overdue annual rate from 0–99.99%, positive maximum amount, and term from 1–120 months.', 422);
         }
         $status = $data['status'] ?? 'active';
         if (!in_array($status, ['active', 'inactive'], true)) {
@@ -1268,6 +1455,7 @@ class ApiLoans extends Controller
             'name' => $name,
             'description' => $description !== '' ? $description : null,
             'interest_rate' => number_format((float) $rate, 2, '.', ''),
+            'overdue_interest_rate' => number_format((float) $overdue_rate, 2, '.', ''),
             'max_amount' => self::format_cents($max_amount),
             'max_term_months' => $term,
             'status' => $status

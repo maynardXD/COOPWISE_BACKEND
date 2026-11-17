@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/brevo_email.php';
+require_once __DIR__ . '/cooperative_finance.php';
 
 function sendDailyPaymentReminders(PDO $db): array
 {
@@ -15,7 +16,10 @@ function sendDailyPaymentReminders(PDO $db): array
     $loanSchedules = $db->prepare(
         "SELECT m.id AS member_id, m.member_number, m.first_name, m.last_name, u.email,
                 s.id AS source_id, s.due_date, l.loan_code AS reference,
-                ROUND(s.total_due - s.paid_amount, 2) AS amount
+                s.principal_due, s.principal_paid, s.total_due, s.paid_amount,
+                s.overdue_interest_accrued, s.overdue_interest_paid,
+                s.overdue_interest_remainder_units, s.overdue_interest_calculated_at, s.status,
+                l.overdue_interest_rate
          FROM loan_schedules s
          INNER JOIN loans l ON l.id = s.loan_id
          INNER JOIN members m ON m.id = l.member_id
@@ -33,12 +37,44 @@ function sendDailyPaymentReminders(PDO $db): array
            AND l.status IN ('approved', 'active')
            AND s.due_date < ?
            AND s.status IN ('pending', 'overdue')
-           AND s.paid_amount < s.total_due
+           AND (s.paid_amount < s.total_due OR s.overdue_interest_paid < s.overdue_interest_accrued)
            AND r.id IS NULL
          ORDER BY m.id ASC, s.due_date ASC, s.id ASC"
     );
     $loanSchedules->execute([$today]);
     foreach ($loanSchedules->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $accrual = cooperativeAccrueLoanScheduleOverdueInterest(
+            $row,
+            (int) round((float) $row['overdue_interest_rate'] * 100),
+            $today
+        );
+        $baseRemaining = max(
+            0,
+            cooperativeMoneyToCents((string) $row['total_due'])
+                - cooperativeMoneyToCents((string) $row['paid_amount'])
+        );
+        $overdueInterestRemaining = $accrual['overdue_interest_balance_cents'];
+        $status = $baseRemaining === 0 && $overdueInterestRemaining === 0
+            ? 'paid'
+            : 'overdue';
+        $db->prepare(
+            'UPDATE loan_schedules
+             SET overdue_interest_accrued = ?, overdue_interest_remainder_units = ?,
+                 overdue_interest_calculated_at = ?, status = ?
+             WHERE id = ?'
+        )->execute([
+            $accrual['overdue_interest_accrued'],
+            $accrual['overdue_interest_remainder_units'],
+            $accrual['overdue_interest_calculated_at'],
+            $status,
+            (int) $row['source_id']
+        ]);
+        $row['overdue_interest_accrued'] = $accrual['overdue_interest_accrued'];
+        $row['overdue_interest_paid'] = $accrual['overdue_interest_paid'];
+        $row['overdue_interest_remainder_units'] = $accrual['overdue_interest_remainder_units'];
+        $baseAmount = cooperativeFormatCents($baseRemaining);
+        $lateAmount = cooperativeFormatCents($overdueInterestRemaining);
+        $totalAmount = cooperativeFormatCents($baseRemaining + $overdueInterestRemaining);
         $memberId = (int) $row['member_id'];
         $members[$memberId] ??= [
             'member' => $row,
@@ -49,7 +85,10 @@ function sendDailyPaymentReminders(PDO $db): array
             'source_id' => (int) $row['source_id'],
             'due_date' => (string) $row['due_date'],
             'reference' => (string) $row['reference'],
-            'amount' => (string) $row['amount']
+            'amount' => $totalAmount,
+            'base_amount' => $baseAmount,
+            'overdue_interest_amount' => $lateAmount,
+            'overdue_interest_rate' => (string) $row['overdue_interest_rate']
         ];
     }
 
@@ -180,17 +219,25 @@ function paymentReminderBuildEmail(array $member, array $items, string $asOfDate
         $label = $isLoan ? 'Loan installment' : 'Daily Paluwagan contribution';
         $reference = (string) $item['reference'];
         $amount = number_format((float) $item['amount'], 2, '.', ',');
+        $overdueInterest = $isLoan
+            ? number_format((float) ($item['overdue_interest_amount'] ?? '0.00'), 2, '.', ',')
+            : '0.00';
+        $overdueRate = $isLoan
+            ? number_format((float) ($item['overdue_interest_rate'] ?? '0.00'), 2, '.', '')
+            : '0.00';
         $htmlRows .= '<tr><td>' . $escape($label) . '</td><td>' . $escape($reference) .
-            '</td><td>' . $escape($item['due_date']) . '</td><td>PHP ' . $escape($amount) . '</td></tr>';
+            '</td><td>' . $escape($item['due_date']) . '</td><td>' . $escape($overdueRate) . '% yearly</td><td>PHP ' . $escape($overdueInterest) .
+            '</td><td>PHP ' . $escape($amount) . '</td></tr>';
         $textRows[] = $label . ' — ' . $reference . ', due ' . $item['due_date'] .
-            ', PHP ' . $amount;
+            ', overdue interest ' . $overdueRate . '% yearly (PHP ' . $overdueInterest .
+            '), total PHP ' . $amount;
     }
 
     $html = '<!doctype html><html><body><p>Hello ' . $escape($memberName) . ',</p>' .
         '<p>CoopWise records show the following payments have not been recorded as of ' .
         $escape($asOfDate) . ':</p>' .
         '<table border="1" cellpadding="6" cellspacing="0"><thead><tr>' .
-        '<th>Payment</th><th>Loan or cycle</th><th>Due date</th><th>Amount</th>' .
+        '<th>Payment</th><th>Loan or cycle</th><th>Due date</th><th>Overdue rate</th><th>Overdue interest</th><th>Total amount due</th>' .
         '</tr></thead><tbody>' . $htmlRows . '</tbody></table>' .
         '<p>If you have already paid, please disregard this message while the record is updated. ' .
         'If you believe a payment is missing from the record, contact cooperative staff.</p>' .

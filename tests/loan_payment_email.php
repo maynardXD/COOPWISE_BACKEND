@@ -31,6 +31,8 @@ $payload = $buildEmail->invoke(null, [
     'current_balance' => '475.00',
     'total_paid' => '475.00',
     'interest_rate' => '5.00',
+    'overdue_interest_rate' => '6.00',
+    'overdue_interest_balance' => '12.34',
     'term_months' => 2,
     'purpose' => '<Testing>'
 ], [
@@ -40,6 +42,8 @@ $payload = $buildEmail->invoke(null, [
         'interest_due' => '25.00',
         'total_due' => '500.00',
         'paid_amount' => '25.00',
+        'overdue_interest_accrued' => '12.34',
+        'overdue_interest_paid' => '0.00',
         'status' => 'overdue'
     ]
 ]);
@@ -48,7 +52,9 @@ assertLoanEmailContains('CW-LN-000028', $payload['textContent'], 'The email shou
 assertLoanEmailContains('PHP 475.00', $payload['textContent'], 'The email should include the current loan balance');
 assertLoanEmailContains('2026-11-17', $payload['textContent'], 'The email should include the due date');
 assertLoanEmailContains('Emergency loan', $payload['textContent'], 'The email should identify the loan offer');
-assertLoanEmailContains('Remaining PHP 475.00', $payload['textContent'], 'The schedule should show each installment remaining balance');
+assertLoanEmailContains('Overdue interest balance: PHP 12.34', $payload['textContent'], 'The email should include the accrued overdue-interest balance');
+assertLoanEmailContains('6.00% per year', $payload['textContent'], 'The email should disclose the agreed overdue-interest rate');
+assertLoanEmailContains('Remaining PHP 487.34', $payload['textContent'], 'The schedule should include overdue interest in the remaining installment balance');
 assertLoanEmailContains('&lt;Member&gt;', $payload['htmlContent'], 'The member name should be escaped in HTML');
 assertLoanEmailContains('&lt;Testing&gt;', $payload['htmlContent'], 'The loan purpose should be escaped in HTML');
 
